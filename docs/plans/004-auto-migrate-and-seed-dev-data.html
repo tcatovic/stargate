@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 004: Apply migrations and seed development data on startup in Development</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2330; --muted: #5a6475; --card: #f5f7fa; --border: #d9dee7;
+    --accent: #2457c5; --ok: #1d7a3d; --warn: #9a6200; --bad: #b42318; --code: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --fg: #e4e8ef; --muted: #9aa4b4; --card: #1a2029; --border: #2c3442;
+      --accent: #7aa2ff; --ok: #5fcf86; --warn: #f0b44c; --bad: #ff7b72; --code: #1f2633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+  h1 { font-size: 1.55rem; line-height: 1.25; margin: .5rem 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  p, li { overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: .92rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+  code { background: var(--code); padding: .08em .3em; border-radius: 4px; }
+  pre { background: var(--code); padding: .8rem; border-radius: 8px; overflow-x: auto; line-height: 1.4; }
+  pre code { background: none; padding: 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem; margin: .8rem 0; }
+  .verdict { border-left: 5px solid var(--accent); }
+  .warn { border-left: 5px solid var(--warn); }
+  .bad { border-left: 5px solid var(--bad); }
+  .tag { display: inline-block; font-size: .78rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; }
+  .tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); } .tag.info { color: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .55rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  nav ol { columns: 2; column-gap: 2rem; padding-left: 1.2rem; }
+  @media (max-width: 560px) { nav ol { columns: 1; } body { font-size: 15px; } }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 004 &middot; branch <code>task/004-auto-migrate-and-seed-dev-data</code> &middot; baseline: <code>main</code> at 216e0d7 (task 003 merged) &middot; status: awaiting approval</p>
+<h1>Plan 004: Apply migrations and seed development data on startup in Development</h1>
+
+<nav aria-label="Contents">
+<ol>
+  <li><a href="#summary">Summary and verdict</a></li>
+  <li><a href="#current">Current behaviour</a></li>
+  <li><a href="#approach">Approach and decisions</a></li>
+  <li><a href="#seed">Seed data (exact rows)</a></li>
+  <li><a href="#changes">Changes by platform</a></li>
+  <li><a href="#contracts">Contracts affected</a></li>
+  <li><a href="#rules">Domain rules</a></li>
+  <li><a href="#tests">Tests</a></li>
+  <li><a href="#qa">QA end to end</a></li>
+  <li><a href="#risks">Risks and rollout</a></li>
+  <li><a href="#unverified">Unverified items</a></li>
+  <li><a href="#questions">Questions for the user</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and verdict</h2>
+<div class="card verdict">
+<p><strong>Verdict: <span class="tag info">simple</span></strong> (one api-dev agent, no contracts folder).</p>
+<p>All changes live in <code>exercise1/api</code> and <code>exercise1/api.Tests</code>: one new startup class, one seed-data class, three lines in <code>Program.cs</code>, removal of dead code in <code>StargateContext</code>, tests and README. The task lists <code>db</code> as a platform, but there is <strong>no schema change and no new migration</strong>; the "db" work is applying the existing chain and inserting rows from C#. No HTTP request/response shape changes, no UI change, so there is nothing for parallel agents to agree on and nothing to split.</p>
+</div>
+<p>The problem is real: <code>Program.cs</code> never touches the database schema, <code>api/README.md:12</code> tells developers to run <code>dotnet ef database update</code> by hand, and a fresh database has no rows. The commented-out <code>SeedData</code> (<code>StargateContext.cs:22-24, 27-67</code>) uses <code>DateTime.Now</code> and would violate rule 4/5 bookkeeping if enabled. No wrong assumption in the task.</p>
+
+<h2 id="current">2. Current behaviour</h2>
+<ul>
+  <li><code>exercise1/api/Program.cs:14-15</code> resolves the connection string through <code>StarbaseDatabase.FromConfiguration</code> (task 003) and registers <code>StargateContext</code>. Nothing after <code>builder.Build()</code> (<code>:23</code>) touches the database; <code>:26</code> uses <code>app.Environment.IsDevelopment()</code> only for Swagger.</li>
+  <li>Development is set by <code>Properties/launchSettings.json:19,29,37</code> (<code>ASPNETCORE_ENVIRONMENT=Development</code> in all three profiles). <code>dotnet run --no-launch-profile</code> or a published dll defaults to <code>Production</code>.</li>
+  <li><code>exercise1/api/Business/Data/StargateContext.cs:22</code> has <code>//SeedData(modelBuilder);</code> and <code>:27-67</code> a <code>HasData</code> seed with <code>John Doe</code>/<code>Jane Doe</code> and <code>DateTime.Now</code>. Dead code.</li>
+  <li>Schema (snapshot): <code>AstronautDetail.PersonId</code> has a unique index; <code>AstronautDuty.PersonId</code> a non-unique index; <strong><code>Person.Name</code> has no unique index</strong> (rule 1 is not DB-enforced today; not this task's scope).</li>
+  <li><code>Business/Commands/CreateAstronautDuty.cs:53-117</code> builds interpolated SQL and sets <code>CareerEndDate</code> inconsistently (<code>:73</code> vs <code>:85</code>). The task says do not seed through it; we don't.</li>
+  <li><code>Controllers/AstronautDutyController.cs:148</code> sends <code>GetPersonByName</code>, not <code>GetAstronautDutiesByName</code>, so <code>GET /AstronautDuty/{name}</code> returns the person summary only, never the duty list.</li>
+  <li><code>Queries/GetPeople.cs:25</code>: <code>GET /Person</code> on a missing/unmigrated database returns 500 with the raw exception message (out of scope; it simply stops happening in Development once startup migrates).</li>
+  <li>Tests: <code>api.Tests/TestDatabase.cs</code> gives a per-test SQLite file under <code>%TEMP%/stargate-tests</code> with <code>Migrate(target)</code>, <code>Scalar</code>, <code>Execute</code>, <code>Strings</code>, <code>AppliedMigrations</code>. The test project already runs on the <code>Microsoft.AspNetCore.App</code> shared framework (checked <code>StargateAPI.Tests.runtimeconfig.json</code>), so <code>IHostEnvironment</code>, <code>ILogger&lt;T&gt;</code> and <code>NullLogger</code> are available with no new package.</li>
+</ul>
+
+<h2 id="approach">3. Approach and decisions</h2>
+
+<h3>D1. Where it runs</h3>
+<p>A new class <code>DevelopmentDatabaseInitializer</code> (<code>Business/Data/DevelopmentDatabaseInitializer.cs</code>), registered scoped, resolved once in <code>Program.cs</code> <strong>after <code>builder.Build()</code> and before <code>app.Run()</code></strong>, so the app never serves a request against an unmigrated or half-initialised database:</p>
+<pre><code>builder.Services.AddScoped&lt;DevelopmentDatabaseInitializer&gt;();
+var app = builder.Build();
+
+using (var scope = app.Services.CreateScope())
+{
+    await scope.ServiceProvider.GetRequiredService&lt;DevelopmentDatabaseInitializer&gt;().InitializeAsync();
+}</code></pre>
+<p>Placement after <code>Build()</code> matters: <code>dotnet ef</code> loads <code>Program</code> through the host factory resolver, which stops the app when the host is built, so design-time commands (<code>migrations add</code>, <code>database update</code>) never trigger the initializer even though they default to the Development environment. (Unverified, see U1.)</p>
+
+<h3>D2. Public shape (the developer must use these names)</h3>
+<pre><code>public sealed class DevelopmentDatabaseInitializer(
+    StargateContext context,
+    IHostEnvironment environment,
+    ILogger&lt;DevelopmentDatabaseInitializer&gt; logger)
+{
+    public Task&lt;DatabaseInitializationResult&gt; InitializeAsync(CancellationToken cancellationToken = default);
+}
+
+public sealed record DatabaseInitializationResult(
+    bool Ran,                                  // false when not Development
+    IReadOnlyList&lt;string&gt; AppliedMigrations,   // ids applied by this run, empty if up to date or not run
+    bool Seeded);                              // true only when this run inserted the seed
+
+public static class DevelopmentSeedData
+{
+    public static IReadOnlyList&lt;Person&gt; People();   // a fresh entity graph on every call, Ids unset
+}</code></pre>
+<p>The environment check is <strong>inside</strong> the initializer (not around the call in <code>Program.cs</code>) so "not executed outside Development" is unit-testable without <code>WebApplicationFactory</code>. Detection is <code>environment.IsDevelopment()</code> (the standard <code>ASPNETCORE_ENVIRONMENT</code>/<code>DOTNET_ENVIRONMENT</code> value, case-insensitive), same as the existing Swagger switch.</p>
+
+<h3>D3. Algorithm</h3>
+<ol>
+  <li>If not Development: log Information <code>"Environment {Environment} is not Development; automatic migration and seeding skipped"</code>, return <code>(false, [], false)</code>. <strong>Do not open a connection</strong> (so no database file is created).</li>
+  <li><code>pending = await context.Database.GetPendingMigrationsAsync(ct)</code>, then <code>await context.Database.MigrateAsync(ct)</code>. Log <code>"Applied {Count} migration(s) to {DataSource}: {Migrations}"</code> or <code>"Database {DataSource} is up to date; no migrations applied"</code>.</li>
+  <li>Seed in <strong>one explicit transaction</strong>: <code>BeginTransactionAsync</code>; <code>if (await context.People.AnyAsync(ct))</code> log <code>"Seeding skipped: database already holds {PeopleCount} people"</code>, roll back, return; else <code>AddRange(DevelopmentSeedData.People())</code>, one <code>SaveChangesAsync</code>, <code>CommitAsync</code>; log <code>"Seeded {PeopleCount} people, {DetailCount} astronaut details and {DutyCount} duties"</code>. The emptiness check is inside the transaction so a second concurrent process fails (SQLite busy) instead of inserting duplicates.</li>
+  <li><code>{DataSource}</code> is <code>new SqliteConnectionStringBuilder(context.Database.GetConnectionString()).DataSource</code>. Never log the full connection string.</li>
+</ol>
+
+<h3>D4. Failure behaviour</h3>
+<p>Any exception in step 2 or 3 is logged at Critical (<code>"Development database initialization failed during {Step} for {DataSource}"</code>) and rethrown wrapped as <code>InvalidOperationException</code> with message <code>"Development database initialization failed during migration|seeding for '&lt;path&gt;'. No seed data was written. See exercise1/api/README.md (Troubleshooting, Reset)."</code> and the original as <code>InnerException</code>. <code>Program.cs</code> does not catch it: the process exits non-zero and the runtime prints the message, so the app never starts serving. A seeding failure rolls back the transaction (nothing seeded); the schema stays migrated, and the next start retries seeding because <code>Person</code> is still empty. Migration and seeding are deliberately <em>not</em> one transaction (EF manages migration transactions itself, and the 003 migration toggles <code>PRAGMA foreign_keys</code>, which cannot run inside one).</p>
+
+<h3>D5. Seeding approach</h3>
+<p>Rows inserted directly via EF (<code>Person</code> graphs with <code>AstronautDetail</code> and <code>AstronautDuties</code> navigation), not through <code>CreateAstronautDutyHandler</code>. Dates are fixed <code>new DateTime(y, m, d)</code> (date-only, no <code>DateTime.Now</code>). Ids are not set; SQLite assigns them. Idempotency rule: seed only when <code>Person</code> is empty. The commented-out <code>SeedData</code> method and its call are deleted from <code>StargateContext</code> (model unchanged; <code>Model_has_no_pending_changes_against_the_migration_chain</code> keeps guarding this).</p>
+
+<h3>Alternatives rejected</h3>
+<ul>
+  <li><strong>EF Core 9+ <code>UseSeeding</code>/<code>UseAsyncSeeding</code></strong> on the <code>DbContextOptions</code>: it also runs on every <code>Migrate()</code> and on <code>dotnet ef database update</code>, including against non-Development databases and inside the existing <code>TestDatabase.Migrate</code> tests, and it gives no single place for the Development gate, logging and the fail-to-start policy. Main alternative, rejected.</li>
+  <li><strong><code>HasData</code></strong> in <code>OnModelCreating</code>: bakes fixed Ids and sample people into a migration that would ship to every environment, and needs a new migration; violates "nothing runs outside Development".</li>
+  <li><strong>An <code>IHostedService</code></strong>: runs concurrently with Kestrel start in some configurations and complicates fail-to-start; a scoped call before <code>Run()</code> is simpler.</li>
+  <li><strong><code>WebApplicationFactory&lt;Program&gt;</code> tests</strong>: would need a new package (<code>Microsoft.AspNetCore.Mvc.Testing</code>) and, because the factory defaults to Development, would run the initializer against whatever database it is pointed at. Testing the class directly covers every acceptance criterion except the three-line <code>Program.cs</code> wiring, which QA covers end to end. See Q2.</li>
+</ul>
+
+<h2 id="seed">4. Seed data (exact rows)</h2>
+<p>Fictional names. Ranks use US-style abbreviations; titles are free text (no allowed list exists yet). Every title/start-date pair is distinct, so the existing pre-processor's global duplicate check (<code>CreateAstronautDuty.cs:37</code>) is not tripped by the seed. Elena's chain crosses a leap day and a year boundary on purpose.</p>
+
+<h3>Person (6 rows)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Name</th><th>Case covered</th></tr></thead>
+<tbody>
+<tr><td>Mira Okafor</td><td>No astronaut records (rule 2)</td></tr>
+<tr><td>Kenji Watanabe</td><td>No astronaut records (rule 2)</td></tr>
+<tr><td>Tomas Lindqvist</td><td>Single current duty (rules 3, 4)</td></tr>
+<tr><td>Priya Raman</td><td>Single current duty (rules 3, 4)</td></tr>
+<tr><td>Elena Vasquez</td><td>Three-duty chain (rules 3, 4, 5)</td></tr>
+<tr><td>Desmond Achebe</td><td>Retired (rules 5, 6, 7)</td></tr>
+</tbody></table></div>
+
+<h3>AstronautDuty (8 rows)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Person</th><th>Rank</th><th>DutyTitle</th><th>DutyStartDate</th><th>DutyEndDate</th></tr></thead>
+<tbody>
+<tr><td>Tomas Lindqvist</td><td>CPT</td><td>Pilot</td><td>2021-06-14</td><td>null</td></tr>
+<tr><td>Priya Raman</td><td>MAJ</td><td>Mission Specialist</td><td>2019-09-02</td><td>null</td></tr>
+<tr><td>Elena Vasquez</td><td>2LT</td><td>Flight Engineer</td><td>2012-01-09</td><td>2016-02-29</td></tr>
+<tr><td>Elena Vasquez</td><td>CPT</td><td>Pilot</td><td>2016-03-01</td><td>2018-12-31</td></tr>
+<tr><td>Elena Vasquez</td><td>MAJ</td><td>Commander</td><td>2019-01-01</td><td>null</td></tr>
+<tr><td>Desmond Achebe</td><td>MAJ</td><td>Pilot</td><td>2008-02-04</td><td>2014-07-14</td></tr>
+<tr><td>Desmond Achebe</td><td>LTC</td><td>Commander</td><td>2014-07-15</td><td>2023-03-31</td></tr>
+<tr><td>Desmond Achebe</td><td>LTC</td><td>RETIRED</td><td>2023-04-01</td><td>null</td></tr>
+</tbody></table></div>
+
+<h3>AstronautDetail (4 rows)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Person</th><th>CurrentRank</th><th>CurrentDutyTitle</th><th>CareerStartDate</th><th>CareerEndDate</th></tr></thead>
+<tbody>
+<tr><td>Tomas Lindqvist</td><td>CPT</td><td>Pilot</td><td>2021-06-14</td><td>null</td></tr>
+<tr><td>Priya Raman</td><td>MAJ</td><td>Mission Specialist</td><td>2019-09-02</td><td>null</td></tr>
+<tr><td>Elena Vasquez</td><td>MAJ</td><td>Commander</td><td>2012-01-09</td><td>null</td></tr>
+<tr><td>Desmond Achebe</td><td>LTC</td><td>RETIRED</td><td>2008-02-04</td><td>2023-03-31</td></tr>
+</tbody></table></div>
+<p>Interpretation used: the RETIRED duty is the person's current duty, so it has no end date (rule 4), and <code>CareerEndDate</code> = RETIRED start minus 1 day (rule 7). <code>CareerEndDate</code> is null for everyone not retired.</p>
+
+<h2 id="changes">5. Changes by platform</h2>
+<h3>api (api-dev)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>exercise1/api/Business/Data/DevelopmentDatabaseInitializer.cs</code> (new)</td><td>Class and <code>DatabaseInitializationResult</code> record per D2-D4.</td></tr>
+<tr><td><code>exercise1/api/Business/Data/DevelopmentSeedData.cs</code> (new)</td><td><code>People()</code> returning the graph in section 4. A short comment says the dates are fixed on purpose and must keep satisfying rules 1-7.</td></tr>
+<tr><td><code>exercise1/api/Program.cs</code></td><td>Register the initializer; create a scope and <code>await ...InitializeAsync()</code> between <code>Build()</code> and the middleware pipeline. No try/catch.</td></tr>
+<tr><td><code>exercise1/api/Business/Data/StargateContext.cs</code></td><td>Delete <code>//SeedData(modelBuilder);</code> and the <code>SeedData</code> method. No model change.</td></tr>
+<tr><td><code>exercise1/api/README.md</code></td><td>See "Docs" below.</td></tr>
+</tbody></table></div>
+<h3>api.Tests (api-dev)</h3>
+<ul>
+  <li><code>exercise1/api.Tests/DevelopmentDatabaseInitializerTests.cs</code> (new): behaviour tests in section 8.</li>
+  <li><code>exercise1/api.Tests/SeedDataRulesTests.cs</code> (new): rules 1-7 via independent SQL.</li>
+  <li><code>exercise1/api.Tests/TestDoubles.cs</code> (new): a minimal <code>IHostEnvironment</code> fake (settable <code>EnvironmentName</code>) and a list-capturing <code>ILogger&lt;T&gt;</code>. No new packages.</li>
+  <li><code>TestDatabase.cs</code>: may gain a <code>Dump()</code> helper (all rows of the three tables, ordered by Id, as one string) and a <code>CreateInitializer(string environmentName, ILogger? logger = null)</code> helper. Existing members unchanged.</li>
+</ul>
+<h3>Docs (exercise1/api/README.md)</h3>
+<ul>
+  <li>Replace "The API does <strong>not</strong> create or migrate it on startup (task 004 will change that)" with: in Development, startup applies pending migrations and seeds sample data when <code>Person</code> is empty; in any other environment it does neither and <code>dotnet ef database update</code> is required. The <code>dotnet ef database update</code> path stays documented as working.</li>
+  <li>A short "Sample data" table (the six names and what each demonstrates).</li>
+  <li>Reset: stop the API, delete <code>starbase.db</code>, <code>-shm</code>, <code>-wal</code>, then <code>dotnet run</code> (migrates and reseeds). To re-seed a database that has people, reset it; the seeder never merges.</li>
+  <li>Troubleshooting rows: "Development database initialization failed during migration" (for example the 003 NULL CareerStartDate guard: back up, fix or reset) and "...during seeding" (nothing was seeded; fix the cause and restart).</li>
+  <li>How to run without migrating (<code>dotnet run --no-launch-profile</code> runs as Production) and the note that seeded duties are not visible via <code>GET /AstronautDuty/{name}</code> yet (see QA).</li>
+  <li>Changelog: no breaking API change. Add a non-breaking note under task 004 that Development startup now migrates and seeds.</li>
+</ul>
+<h3>ui, infra, db</h3>
+<p>None. No migration, no schema change.</p>
+
+<h2 id="contracts">6. Contracts affected</h2>
+<p>None. No endpoint, request/response shape, schema or migration changes. <span class="tag ok">no breaking change</span>. <code>GET /Person</code> returns the seeded people in Development; that is data, not contract.</p>
+
+<h2 id="rules">7. Domain rules</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Rule</th><th>How it stays true in the seed</th><th>Checked by</th></tr></thead>
+<tbody>
+<tr><td>1 unique name</td><td>Six distinct names (also distinct case-insensitively).</td><td>SQL <code>GROUP BY lower(Name) HAVING COUNT(*) &gt; 1</code> is empty.</td></tr>
+<tr><td>2 no records without assignment</td><td>Mira and Kenji have no detail and no duties. Detail exists if and only if duties exist.</td><td>SQL: no person with a detail and zero duties, or duties and no detail; at least one person with neither.</td></tr>
+<tr><td>3 one current duty</td><td>Each astronaut has exactly one null-end duty.</td><td>SQL count of null-end duties per astronaut = 1.</td></tr>
+<tr><td>4 current has no end</td><td>The null-end duty is the latest start.</td><td>SQL: null-end duty start = MAX(start) per person.</td></tr>
+<tr><td>5 previous ends day before next</td><td>Elena and Desmond chains.</td><td>SQL with <code>LEAD()</code>: <code>date(DutyEndDate) = date(next start, '-1 day')</code> for every non-last duty.</td></tr>
+<tr><td>6 RETIRED</td><td>Desmond's current title is <code>RETIRED</code>.</td><td>SQL: at least one person whose current duty title is <code>RETIRED</code>.</td></tr>
+<tr><td>7 career end</td><td>Desmond 2023-03-31; null for non-retired.</td><td>SQL: <code>date(CareerEndDate) = date(retired start, '-1 day')</code>; others <code>CareerEndDate IS NULL</code>.</td></tr>
+<tr><td>Detail agrees with latest duty</td><td>Rank, title from current duty; start = first duty start.</td><td>SQL join of detail to the null-end duty and to <code>MIN(DutyStartDate)</code>.</td></tr>
+</tbody></table></div>
+<p>The seed is written once and never mutated by the app, so these hold at insert time. Rules are not newly enforced in the database by this task (no unique index on <code>Name</code>; that belongs to the duty-rules/defensive-coding tasks).</p>
+
+<h2 id="tests">8. Tests</h2>
+<p>All in <code>exercise1/api.Tests</code>, each on its own <code>TestDatabase</code> file (never <code>starbase.db</code>). Initializer built directly: <code>new DevelopmentDatabaseInitializer(db.CreateContext(), fakeEnv, logger)</code>.</p>
+<h3>DevelopmentDatabaseInitializerTests</h3>
+<ol>
+  <li><strong>Missing file, Development</strong>: Given no file at <code>db.Path</code>, when initialized, then <code>Ran</code>, <code>AppliedMigrations</code> equals both migrations in order, <code>Seeded</code> is true, <code>db.AppliedMigrations()</code> is complete, Person count is 6.</li>
+  <li><strong>Out-of-date, empty</strong>: Given <code>db.Migrate(InitialCreate)</code>, when initialized, then <code>AppliedMigrations == [LatestMigration]</code>, <code>CareerStartDateIsNotNull()</code>, seeded.</li>
+  <li><strong>Up to date, empty</strong> (as left by 003's <code>dotnet ef database update</code>): no migrations applied, seeded.</li>
+  <li><strong>Idempotent</strong>: run twice on the same file; second result <code>([], Seeded=false)</code>; <code>Dump()</code> identical before and after; counts 6/4/8.</li>
+  <li><strong>Skipped when people exist</strong>: Given migrated db with one person "Ada", when initialized, then <code>Seeded</code> false, Person count 1, detail and duty counts 0.</li>
+  <li><strong>Not Development</strong> (Theory: <code>Production</code>, <code>Staging</code>, <code>Test</code>): Given no file, when initialized, then <code>Ran</code> false and <code>File.Exists(db.Path)</code> is false. Second case: Given <code>db.Migrate(InitialCreate)</code>, then history is still only <code>InitialCreate</code> and Person count 0.</li>
+  <li><strong>Development detection is case-insensitive</strong>: <code>"development"</code> runs.</li>
+  <li><strong>Seeding failure rolls back</strong> (hostile DB): Given a migrated db with <code>CREATE TRIGGER fail_seed BEFORE INSERT ON AstronautDuty WHEN NEW.DutyTitle = 'RETIRED' BEGIN SELECT RAISE(ABORT, 'seed boom'); END;</code>, when initialized, then it throws <code>InvalidOperationException</code> whose message contains <code>"seeding"</code> and the data source path, the inner chain contains <code>"seed boom"</code>, and Person, AstronautDetail and AstronautDuty counts are all 0. Then drop the trigger, initialize again: seeded (retry works).</li>
+  <li><strong>Migration failure fails start</strong>: Given the 003 scenario (InitialCreate, one person, a detail with NULL <code>CareerStartDate</code>), when initialized, then it throws <code>InvalidOperationException</code> with <code>"migration"</code> in the message and the 003 guard text (<code>"NULL CareerStartDate"</code>) in the inner chain; history is still only <code>InitialCreate</code>; no seed rows (Person count still 1).</li>
+  <li><strong>Logging</strong>: with the capturing logger, a fresh run logs Information entries for migrations applied (count 2) and seeding ran; a second run logs "no migrations applied" and "Seeding skipped"; the failure test logs one Critical entry. Assert on level and key words, not exact text. No entry contains <code>"Data Source="</code> (connection string never logged).</li>
+  <li><strong>Cancellation</strong>: an already-cancelled token throws <code>OperationCanceledException</code> and leaves no seed rows.</li>
+</ol>
+<h3>SeedDataRulesTests (independent of the seeder's constants)</h3>
+<p>Seed a fresh <code>TestDatabase</code> through the initializer, then assert only with SQL through <code>db.Scalar</code>/<code>db.Strings</code> (never by reading <code>DevelopmentSeedData</code>):</p>
+<ol>
+  <li>Rule 1: no duplicate names (case-insensitive).</li>
+  <li>Rule 2: at least one person with no detail and no duties; detail exists iff duties exist.</li>
+  <li>Rules 3/4: per astronaut exactly one <code>DutyEndDate IS NULL</code>, and it has the max start.</li>
+  <li>Rule 5: every non-last duty ends the day before the next starts (<code>LEAD</code> window query); at least one person has 3 or more duties.</li>
+  <li>Rules 6/7: at least one person currently <code>RETIRED</code>; their <code>CareerEndDate</code> = retired start minus 1 day; every non-retired detail has null <code>CareerEndDate</code>.</li>
+  <li>Coverage: at least two people with exactly one duty and a null end date.</li>
+  <li>Detail agrees with current duty (rank, title) and <code>CareerStartDate = MIN(DutyStartDate)</code>.</li>
+  <li>Date-only: every stored date ends in <code>00:00:00</code>.</li>
+  <li>Deterministic: two fresh databases seeded separately have identical <code>Dump()</code> output.</li>
+</ol>
+<p>Existing tests (<code>MigrationTests</code>, <code>StarbaseDatabaseTests</code>, including <code>Model_has_no_pending_changes...</code> and <code>Test_databases_live_under_the_temp_folder...</code>) must keep passing. Build: the API still has the 6 known nullability warnings (task 005), so build the API with plain <code>dotnet build</code> and confirm the count stays 6 (no new warnings); the test project already has <code>TreatWarningsAsErrors</code> and must stay clean.</p>
+
+<h2 id="qa">9. QA end to end</h2>
+<ol>
+  <li><strong>Clean Development start</strong>: stop the API, delete <code>exercise1/api/starbase.db*</code>, <code>dotnet run</code> (http profile). Console shows "Applied 2 migration(s)" and "Seeded 6 people, 4 astronaut details and 8 duties" before "Now listening on".</li>
+  <li><code>GET http://localhost:5204/Person</code>: 200 with six people; Mira and Kenji have null rank/title/dates; Desmond has <code>RETIRED</code> and <code>careerEndDate</code> 2023-03-31.</li>
+  <li><code>GET /AstronautDuty/Elena%20Vasquez</code>: 200 but returns the <strong>person summary only</strong> (current rank MAJ, Commander, career start 2012-01-09), because the controller calls <code>GetPersonByName</code> (<code>AstronautDutyController.cs:148</code>). This is an existing bug for a later task; the acceptance criterion "returns the sample data" is satisfied only in that sense. Verify duties directly:
+<pre><code>sqlite3 exercise1/api/starbase.db "SELECT p.Name, d.Rank, d.DutyTitle, d.DutyStartDate, d.DutyEndDate FROM AstronautDuty d JOIN Person p ON p.Id = d.PersonId ORDER BY p.Name, d.DutyStartDate"
+# without sqlite3:
+python3 -c "import sqlite3,sys;[print(r) for r in sqlite3.connect(sys.argv[1]).execute('SELECT p.Name,d.Rank,d.DutyTitle,d.DutyStartDate,d.DutyEndDate FROM AstronautDuty d JOIN Person p ON p.Id=d.PersonId ORDER BY p.Name,d.DutyStartDate')]" exercise1/api/starbase.db</code></pre>
+  Expect exactly the 8 rows in section 4.</li>
+  <li><strong>Restart</strong>: second <code>dotnet run</code> logs "no migrations applied" and "Seeding skipped"; counts unchanged (6/4/8).</li>
+  <li><strong>Out-of-date db</strong>: delete the file, <code>dotnet ef database update 20240122154939_InitialCreate</code>, then <code>dotnet run</code>: logs 1 migration applied and seeding.</li>
+  <li><strong>Non-Development</strong>: <code>ConnectionStrings__StarbaseApiDatabase="Data Source=/tmp/qa004/prod.db" dotnet run --no-launch-profile</code> (create <code>/tmp/qa004</code> first): log says automatic migration skipped, and <code>/tmp/qa004/prod.db</code> does not exist after startup (a later request may create an empty file and return 500 "no such table", which is the known out-of-scope behaviour).</li>
+  <li><strong>Failure</strong>: in Development, a database with a NULL <code>CareerStartDate</code> at InitialCreate (as in 003 QA) makes startup exit non-zero with "Development database initialization failed during migration" and never print "Now listening on".</li>
+  <li><code>dotnet ef database update</code> on an up-to-date db still reports nothing to apply and does not seed (no "Seeded" log, Person count unchanged on an empty db).</li>
+</ol>
+
+<h2 id="risks">10. Risks and rollout</h2>
+<ul>
+  <li><strong>Data impact</strong>: Development only. An existing developer <code>starbase.db</code> with people is never modified by seeding; an empty one gets the six sample people. A database pending the 003 migration is now migrated at startup (same migration and guard as <code>dotnet ef database update</code>; it already aborts without changing data on NULL rows).</li>
+  <li><strong>Behaviour change</strong>: a broken Development database now stops the app at startup instead of failing on the first request. Intended; documented in README Troubleshooting.</li>
+  <li><strong>Future integration tests</strong>: <code>WebApplicationFactory</code> defaults to Development, so the initializer will run there. Those tests must point the context at a <code>TestDatabase</code> (they get a migrated, seeded db, which is useful) and must never reach <code>starbase.db</code>.</li>
+  <li><strong>Future validation</strong>: if a later task restricts ranks/titles to an allowed list, the seed must conform; the rules test does not check that.</li>
+  <li><strong>Concurrency</strong>: two Development instances on one file: EF's migration lock serialises migrations; the seeding transaction makes the second writer fail with SQLITE_BUSY rather than duplicate. Acceptable for Development.</li>
+  <li><strong>Rollback</strong>: revert the commit. No schema or data migration to undo; seeded rows in developer databases are disposable (reset per README).</li>
+</ul>
+
+<h2 id="unverified">11. Unverified items (cheap checks for the developer/QA)</h2>
+<div class="card warn">
+<ol>
+  <li><strong>U1. <code>dotnet ef</code> does not run the initializer.</strong> Expected because the host factory resolver stops at <code>Build()</code>. Check: on a deleted <code>starbase.db</code>, run <code>dotnet ef migrations list</code>; output must contain no "Seeded"/"Applied" lines from the initializer, and afterwards <code>Person</code> must not exist or be empty.</li>
+  <li><strong>U2. Critical log line is flushed before the process dies.</strong> The console logger writes on a background queue. Even if the Critical line is lost, the unhandled <code>InvalidOperationException</code> message is printed by the runtime. Check during QA step 7 that at least the exception message appears; if the log line is missing that is acceptable.</li>
+  <li><strong>U3. <code>MigrateAsync</code> on the anchored path from <code>Program.cs</code></strong> behaves as the 003 tests' <code>IMigrator.Migrate</code> does (same provider, same path resolution). Check: QA step 1.</li>
+  <li><strong>U4. EF Core 10 <code>MigrateAsync</code> throws on pending model changes</strong> (EF 9+ behaviour). Guarded by the existing <code>Model_has_no_pending_changes</code> test; no action unless that test fails.</li>
+</ol>
+</div>
+<p>No probes were run for this plan; decisions are from the code. The only check made was that the test project already uses the ASP.NET Core shared framework, so no new package is needed.</p>
+
+<h2 id="questions">12. Questions for the user</h2>
+<ol>
+  <li><strong>Seed contents</strong>: are the six names, ranks (2LT/CPT/MAJ/LTC) and titles in section 4 acceptable? <em>Recommendation: yes as listed.</em></li>
+  <li><strong>Program-level test</strong>: adding <code>Microsoft.AspNetCore.Mvc.Testing</code> (new dependency) would let a test cover the <code>Program.cs</code> wiring too. <em>Recommendation: not in this task; test the initializer directly and let QA cover the wiring. Add the package in the controller/integration-test task, where it is needed anyway.</em></li>
+  <li><strong>Opt-out switch</strong>: should Development be able to turn off auto-migrate/seed (for example <code>Database:AutoInitialize=false</code>)? <em>Recommendation: no for now; <code>dotnet run --no-launch-profile</code> already runs without it, and the task does not ask for one.</em></li>
+</ol>
+</main>
+</body>
+</html>

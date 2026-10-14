@@ -23,3 +23,7 @@ npm-debug.log*
 
 # Local Claude state
 .claude/settings.local.json
+
+# Claude Code runtime files
+.claude/scheduled_tasks.lock
+.claude/worktrees/

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QA 004: Apply migrations and seed development data on startup</title>
+<style>
+:root{--bg:#fff;--fg:#1d2330;--muted:#5a6475;--card:#f5f7fa;--border:#d9dee7;--ok:#1d7a3d;--warn:#9a6200;--bad:#b42318;--code:#eef1f6}
+@media(prefers-color-scheme:dark){:root{--bg:#11151c;--fg:#e4e8ef;--muted:#9aa4b4;--card:#1a2029;--border:#2c3442;--ok:#5fcf86;--warn:#f0b44c;--bad:#ff7b72;--code:#1f2633}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,sans-serif}
+main{max-width:960px;margin:0 auto;padding:1rem 1rem 4rem}h1{font-size:1.5rem}h2{font-size:1.2rem;margin-top:2rem;border-bottom:1px solid var(--border)}
+code,pre{font-family:ui-monospace,Menlo,monospace;font-size:.86em}code{background:var(--code);padding:.05em .3em;border-radius:4px}
+pre{background:var(--code);padding:.7rem;border-radius:8px;overflow-x:auto}.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:.7rem 1rem;margin:.8rem 0}
+.tag{font-weight:700;border:1px solid currentColor;border-radius:999px;padding:.05rem .5rem;font-size:.8rem}.pass{color:var(--ok)}.fail{color:var(--bad)}.nt{color:var(--warn)}
+.w{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:.9rem}th,td{text-align:left;vertical-align:top;padding:.4rem .5rem;border-bottom:1px solid var(--border)}th{color:var(--muted)}
+td{overflow-wrap:anywhere}
+</style></head><body><main>
+<p style="color:var(--muted)">Task 004 &middot; branch <code>task/004-auto-migrate-and-seed-dev-data</code> &middot; QA run 2026-10-14 &middot; real API process (Debug and Release builds in scratch dirs, scratch SQLite files)</p>
+<h1>QA 004: Apply migrations and seed development data on startup</h1>
+<div class="card"><p><strong>Verdict: <span class="tag pass">pass</span></strong></p>
+<p>Every acceptance criterion has an observed pass and nothing failed. No defects in the task. Three observations (none a failure of this task) are listed under Observations. The UI was not in scope (no UI change).</p></div>
+
+<h2>Method</h2>
+<p>Debug and Release were built with <code>dotnet build -c &lt;cfg&gt; -o &lt;scratch&gt;</code> and started as <code>dotnet StargateAPI.dll</code> with <code>ASPNETCORE_URLS=http://localhost:5214</code> and an absolute <code>ConnectionStrings__StarbaseApiDatabase</code> pointing at scratch files. The README steps that use the default path were run literally with <code>dotnet run</code> in <code>exercise1/api</code> (port 5204), and <code>exercise1/api/starbase.db</code> was returned to 0 bytes afterwards. DB state was read back with <code>python3 -I</code> + <code>sqlite3</code>. All processes were stopped (<code>pgrep -x dotnet</code> empty at end).</p>
+
+<h2>Criteria to cases</h2>
+<div class="w"><table>
+<tr><th>Acceptance criterion</th><th>Case</th><th>Result</th><th>Observed evidence</th></tr>
+<tr><td>Dev start on missing / empty / out-of-date DB migrates then seeds, no manual step</td><td>C1 missing file; C2a 0-byte file; C2b DB at InitialCreate (<code>dotnet ef database update InitialCreate</code>, 0 people)</td><td><span class="tag pass">pass</span></td><td>C1/C2a log: <code>Applied 2 migration(s) to &lt;path&gt;: 20240122154939_InitialCreate, 20261014212120_MakeCareerStartDateRequired</code> then <code>Seeded 6 people, 4 astronaut details and 8 duties</code>, both before <code>Now listening on</code>. C2b: <code>Applied 1 migration(s) ...MakeCareerStartDateRequired</code> then seeded. <code>GET /Person</code> 200 with 6 people.</td></tr>
+<tr><td>Other environments: no migrations, no seed; documented check</td><td>C6 Production and unset env; C7 Release+Development; README</td><td><span class="tag pass">pass</span></td><td>Production and unset (defaults to Production): <code>Environment Production is not Development; automatic migration and seeding skipped</code>; startup left the directory empty (no DB file); only after a later <code>GET /Person</code> did an empty 0-byte file appear, response 500 <code>no such table: Person</code> (known, out of scope). Release + <code>ASPNETCORE_ENVIRONMENT=Development</code>, missing file: <code>This is not a Debug build; automatic migration and seeding skipped</code>, no file created. Release on a migrated empty DB copy: md5 unchanged, 0 people, history still 2 rows. Release with relative path fails at startup (exit 134) as README says.</td></tr>
+<tr><td>Seeder idempotent; two starts give identical data</td><td>C3</td><td><span class="tag pass">pass</span></td><td>2nd start: <code>Database ... is up to date; no migrations applied</code>, <code>Seeding skipped: database already holds 6 people</code>, no Person INSERT in log. Dump of all three tables plus migration history: md5 identical before and after (<code>0850667632fab4d1e571d3099bc96b63</code>).</td></tr>
+<tr><td>Seed covers rules 1-7 cases; fixed dates</td><td>C4 own SQL (<code>tmp/rules.py</code>)</td><td><span class="tag pass">pass</span></td><td>R1 no duplicate names (case-insensitive). R2: Mira Okafor and Kenji Watanabe have no detail and no duties; detail exists iff duties exist. R3/R4: every astronaut has exactly one NULL-end duty and it is the latest start. R5 (LEAD window): no gaps; Elena chain 2016-02-29 -> 2016-03-01 (leap day), 2018-12-31 -> 2019-01-01. R6/R7: Desmond Achebe current title RETIRED, start 2023-04-01, CareerEndDate 2023-03-31; all others NULL. Two people with a single open duty (Tomas Lindqvist, Priya Raman). Same dump on every fresh DB (C1, C2, README run). Names are fictional, not John/Jane Doe.</td></tr>
+<tr><td>AstronautDetail agrees with latest duty</td><td>C4 SQL join</td><td><span class="tag pass">pass</span></td><td>Zero rows where rank, title differ from the open duty, or CareerStartDate differs from MIN(DutyStartDate). Details: 4, duties: 8, <code>pragma foreign_key_check</code> empty.</td></tr>
+<tr><td>A test checks rules 1-7</td><td>C11 <code>dotnet test</code> (Debug)</td><td><span class="tag pass">pass</span></td><td>61 passed, 0 failed. I did not review the test source; only the outcome was observed.</td></tr>
+<tr><td><code>GET /Person</code> and <code>GET /AstronautDuty/{name}</code> return sample data on running API</td><td>C1, C4, C5</td><td><span class="tag pass">pass</span> (with known caveat)</td><td><code>GET /Person</code> returns the 6 people (Desmond: LTC/RETIRED, careerEndDate 2023-03-31). <code>GET /Person/Elena%20Vasquez</code>, <code>/Desmond%20Achebe</code>, <code>/Mira%20Okafor</code> return the right person. <code>GET /AstronautDuty/Elena%20Vasquez</code> returns 200 with the person summary only (known controller bug, not a failure); the duties were verified by SQL (8 rows match the plan exactly). Unknown name returns 200 with <code>"person":null</code> (known, task 001).</td></tr>
+<tr><td>Startup logs say whether migrations applied and seeding ran or skipped</td><td>C1-C3, C6, C7</td><td><span class="tag pass">pass</span></td><td>All five message variants observed (applied N, up to date, seeded, seeding skipped, environment / not Debug skipped). Only the file path is logged by the app's own messages (EF's own command logs are separate).</td></tr>
+<tr><td>Failure fails startup clearly; seeding in one transaction</td><td>C8</td><td><span class="tag pass">pass</span></td><td>InitialCreate DB with a person and an AstronautDetail whose CareerStartDate is NULL: log <code>crit: ... failed during migration for &lt;path&gt;</code> with inner <code>MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate. No data was changed. Set CareerStartDate on those rows first (back up the database ...). Only for a disposable development database: delete starbase.db ...</code>; <code>Unhandled exception. System.InvalidOperationException: Development database initialization failed during migration ...</code>; exit code 134; <code>Now listening</code> never printed; table dump and migration history byte-identical to before. Safe option comes first. The seeding-failure rollback was not exercised in a real process (see Not tested).</td></tr>
+<tr><td>Tests do not depend on <code>starbase.db</code></td><td>C11</td><td><span class="tag pass">pass</span></td><td>Tests ran with <code>starbase.db</code> at 0 bytes and stayed 0 bytes. The temp-folder guard test is part of the 61 passing tests.</td></tr>
+<tr><td>README documents automatic behaviour and reset</td><td>C10</td><td><span class="tag pass">pass</span></td><td>Ran literally: <code>dotnet run</code> on a 0-byte <code>starbase.db</code> migrated and seeded (log path = repo <code>starbase.db</code>, Swagger 200). Reset steps (<code>rm -f starbase.db*; dotnet run</code>) recovered the DB after I deliberately damaged it. <code>dotnet run --no-launch-profile</code>: skipped, DB left at 0 bytes. <code>dotnet ef database update</code> twice: second says <q>No migrations were applied. The database is already up to date.</q> and Person count 0. <code>has-pending-model-changes</code>: no changes. <code>dbcontext info</code> data source is the repo path. Sample-data table matches the DB rows. Release / Debug-only statements match observed behaviour. No inaccurate statement found.</td></tr>
+<tr><td>Extra: ef commands never run the initializer</td><td>C9</td><td><span class="tag pass">pass</span></td><td><code>dotnet ef database update InitialCreate</code>, <code>migrations list</code>, <code>database update</code> on fresh scratch DBs: no initializer log lines, Person count 0 afterwards, <code>migrations list</code> showed pending migrations unchanged.</td></tr>
+<tr><td>Repo hygiene</td><td>C11</td><td><span class="tag pass">pass</span></td><td><code>git ls-files | grep '\.db$'</code> empty; <code>git status</code> shows no tracked changes (only pre-existing untracked <code>tasks/001,002,005,006</code> files, not mine); <code>starbase.db</code> is gitignored and 0 bytes; Release <code>obj/Release</code> I created was removed.</td></tr>
+</table></div>
+
+<h2>Failures</h2>
+<p>None.</p>
+
+<h2>Observations (not failures of this task)</h2>
+<div class="card">
+<ol>
+<li><strong>SQL injection in the name handlers destroys the seeded database.</strong> <code>GET /Person/Nobody';%20DROP%20TABLE%20AstronautDuty;--</code> (URL-encoded) returned 200 and the table <code>AstronautDuty</code> was gone afterwards. The same request first run with <code>DROP TABLE Person</code> dropped <code>Person</code>, after which <code>/AstronautDuty/...</code> returned 500 <code>no such table: Person</code>. This is the known, explicitly out-of-scope handler issue; it matters because Development now holds data worth protecting. The README Reset steps recover it.</li>
+<li><code>GET /Person</code> returns <code>currentRank: ""</code> and <code>currentDutyTitle: ""</code> (not null) for Mira and Kenji; the plan's QA step said null. The database rows are absent as required (rule 2); the empty strings come from the existing query, not the seeder.</li>
+<li>Unhandled startup failure exits with code 134 (SIGABRT, from the runtime's unhandled-exception path) rather than 1. Non-zero as required, and the message is clear; just noting the value.</li>
+</ol></div>
+
+<h2>Not tested</h2>
+<ul>
+<li>Seeding failure rollback in a real process (for example a trigger that rejects the RETIRED duty): covered by the automated tests per the plan but not exercised against the running app.</li>
+<li>Two Development instances racing on one file (SQLITE_BUSY behaviour).</li>
+<li>The <code>https</code> and IIS Express launch profiles; only <code>http</code> via <code>dotnet run</code> was used.</li>
+<li>The content of the automated tests was not reviewed; only that 61 pass.</li>
+<li>UI: no UI change in this task; not exercised.</li>
+</ul>
+</main></body></html>

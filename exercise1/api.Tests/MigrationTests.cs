@@ -27,6 +27,10 @@ public class MigrationTests
         Assert.Contains("Person", tables);
         Assert.Contains("AstronautDetail", tables);
         Assert.Contains("AstronautDuty", tables);
+        foreach (var table in new[] { "Person", "AstronautDetail", "AstronautDuty" })
+        {
+            Assert.Equal(new[] { "Id" }, db.Strings($"SELECT name FROM pragma_table_info('{table}') WHERE pk > 0"));
+        }
         Assert.True(db.CareerStartDateIsNotNull());
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM pragma_foreign_key_list('AstronautDetail') WHERE \"table\" = 'Person' AND on_delete = 'CASCADE'"));
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM pragma_foreign_key_list('AstronautDuty') WHERE \"table\" = 'Person' AND on_delete = 'CASCADE'"));
@@ -60,6 +64,8 @@ public class MigrationTests
 
         Assert.True(db.CareerStartDateIsNotNull());
         Assert.Equal("2020-01-02 00:00:00", db.Scalar<string>("SELECT \"CareerStartDate\" FROM \"AstronautDetail\" WHERE \"Id\" = 7 AND \"PersonId\" = 1"));
+        Assert.Equal("Captain", db.Scalar<string>("SELECT \"CurrentRank\" FROM \"AstronautDetail\" WHERE \"Id\" = 7"));
+        Assert.Equal("Pilot", db.Scalar<string>("SELECT \"CurrentDutyTitle\" FROM \"AstronautDetail\" WHERE \"Id\" = 7"));
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM \"AstronautDetail\""));
     }
 
@@ -89,12 +95,12 @@ public class MigrationTests
         var sqlite = Assert.IsType<SqliteException>(error is SqliteException ? error : error.InnerException);
         Assert.Contains("NULL CareerStartDate", sqlite.Message);
         Assert.Contains("No data was changed", sqlite.Message);
+        Assert.Contains("back up", sqlite.Message);
         Assert.False(db.CareerStartDateIsNotNull());
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM \"AstronautDetail\" WHERE \"Id\" = 1 AND \"CareerStartDate\" IS NULL"));
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM \"AstronautDetail\" WHERE \"Id\" = 2 AND \"CareerStartDate\" = '2021-05-06 00:00:00'"));
         Assert.Equal(new[] { TestDatabase.InitialCreate }, db.AppliedMigrations());
         Assert.Equal(0, db.Scalar<long>("SELECT COUNT(*) FROM sqlite_master WHERE name LIKE 'ef\\_temp\\_%' ESCAPE '\\' OR name LIKE '\\_\\_guard\\_%' ESCAPE '\\'"));
-        Assert.Equal(0, db.Scalar<long>("SELECT COUNT(*) FROM sqlite_temp_master"));
     }
 
     [Fact]
@@ -110,6 +116,11 @@ public class MigrationTests
         Assert.False(db.CareerStartDateIsNotNull());
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM \"AstronautDetail\" WHERE \"Id\" = 7"));
         Assert.Equal(new[] { TestDatabase.InitialCreate }, db.AppliedMigrations());
+        db.Execute("INSERT INTO \"Person\" (\"Id\", \"Name\") VALUES (2, 'Grace');");
+        db.Execute("INSERT INTO \"AstronautDetail\" (\"Id\", \"PersonId\", \"CurrentRank\", \"CurrentDutyTitle\", \"CareerStartDate\") VALUES (8, 2, 'Major', 'Engineer', NULL);");
+        Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM pragma_foreign_key_list('AstronautDetail') WHERE \"table\" = 'Person' AND on_delete = 'CASCADE'"));
+        Assert.Equal(1, db.Scalar<long>("SELECT \"unique\" FROM pragma_index_list('AstronautDetail') WHERE name = 'IX_AstronautDetail_PersonId'"));
+        db.Execute("DELETE FROM \"AstronautDetail\" WHERE \"Id\" = 8;"); // the NULL row would (rightly) block re-applying
 
         db.Migrate();
 

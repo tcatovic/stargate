@@ -11,9 +11,7 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 // Resolved eagerly so a bad or relative path in a Release build fails at startup, not on the first request.
-var connectionString = StarbaseDatabase.ResolveConnectionString(
-    builder.Configuration.GetConnectionString(StarbaseDatabase.ConnectionStringName),
-    StarbaseDatabase.ProjectDirectory);
+var connectionString = StarbaseDatabase.FromConfiguration(builder.Configuration);
 builder.Services.AddDbContext<StargateContext>(options => options.UseSqlite(connectionString));
 
 builder.Services.AddMediatR(cfg =>

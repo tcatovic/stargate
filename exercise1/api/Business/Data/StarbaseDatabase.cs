@@ -1,5 +1,6 @@
 using System.Reflection;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 
 namespace StargateAPI.Business.Data
 {
@@ -24,8 +25,15 @@ namespace StargateAPI.Business.Data
             .FirstOrDefault(a => a.Key == ProjectDirectoryMetadataKey)?.Value;
 
         /// <summary>
+        /// The connection string for the running app: the configured value, anchored to the API project folder.
+        /// </summary>
+        public static string FromConfiguration(IConfiguration configuration) =>
+            ResolveConnectionString(configuration.GetConnectionString(ConnectionStringName), ProjectDirectory);
+
+        /// <summary>
         /// Anchors a relative SQLite Data Source to <paramref name="baseDirectory"/>.
-        /// Absolute and in-memory sources are returned unchanged.
+        /// Fully qualified and in-memory sources are returned unchanged
+        /// (drive-relative Windows paths such as C:x.db are not fully qualified and are anchored).
         /// </summary>
         public static string ResolveConnectionString(string? configured, string? baseDirectory)
         {
@@ -36,7 +44,7 @@ namespace StargateAPI.Business.Data
             if (string.IsNullOrWhiteSpace(dataSource)
                 || dataSource == ":memory:"
                 || builder.Mode == SqliteOpenMode.Memory
-                || Path.IsPathRooted(dataSource))
+                || Path.IsPathFullyQualified(dataSource))
             {
                 return builder.ToString();
             }

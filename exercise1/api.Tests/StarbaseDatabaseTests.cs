@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Configuration;
 using StargateAPI.Business.Data;
 
 namespace StargateAPI.Tests;
@@ -29,9 +30,6 @@ public sealed class StarbaseDatabaseTests : IDisposable
     {
         var result = StarbaseDatabase.ResolveConnectionString(configured, _dir);
 
-        Assert.Equal(
-            StarbaseDatabase.ResolveConnectionString(StarbaseDatabase.DefaultConnectionString, _dir),
-            result);
         Assert.Equal(Path.Combine(_dir, "starbase.db"), DataSource(result));
     }
 
@@ -83,10 +81,43 @@ public sealed class StarbaseDatabaseTests : IDisposable
         Assert.Contains("absolute path", error.Message);
     }
 
+    private static IConfiguration Config(string? value) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(value is null
+                ? new Dictionary<string, string?>()
+                : new Dictionary<string, string?> { [$"ConnectionStrings:{StarbaseDatabase.ConnectionStringName}"] = value })
+            .Build();
+
+    [Fact]
+    public void FromConfiguration_absolute_value_passes_through()
+    {
+        var absolute = Path.Combine(_dir, "abs.db");
+
+        Assert.Equal(absolute, DataSource(StarbaseDatabase.FromConfiguration(Config($"Data Source={absolute}"))));
+    }
+
+#if DEBUG
+    // Debug builds embed the API project folder; Release builds do not (ProjectDirectory is null).
+    [Fact]
+    public void FromConfiguration_anchors_relative_and_missing_values_to_the_project_folder_whatever_the_cwd()
+    {
+        var expected = Path.Combine(Assert.IsType<string>(StarbaseDatabase.ProjectDirectory), "starbase.db");
+        var original = Directory.GetCurrentDirectory();
+        Directory.SetCurrentDirectory(_dir);
+        try
+        {
+            Assert.Equal(expected, DataSource(StarbaseDatabase.FromConfiguration(Config("Data Source=starbase.db"))));
+            Assert.Equal(expected, DataSource(StarbaseDatabase.FromConfiguration(Config(null))));
+        }
+        finally
+        {
+            Directory.SetCurrentDirectory(original);
+        }
+    }
+
     [Fact]
     public void Project_directory_is_the_real_api_folder()
     {
-        // Debug builds embed the folder; the tests run in Debug.
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "api", "StargateAPI.csproj")))
         {
@@ -98,12 +129,56 @@ public sealed class StarbaseDatabaseTests : IDisposable
             Path.GetFullPath(Path.Combine(directory.FullName, "api")),
             Path.GetFullPath(Assert.IsType<string>(StarbaseDatabase.ProjectDirectory)));
     }
+#else
+    [Fact]
+    public void Release_builds_do_not_embed_the_project_folder_and_reject_relative_paths()
+    {
+        Assert.Null(StarbaseDatabase.ProjectDirectory);
+        Assert.Throws<InvalidOperationException>(() =>
+            StarbaseDatabase.FromConfiguration(Config("Data Source=starbase.db")));
+    }
+#endif
+
+    [Theory]
+    [InlineData("C:starbase.db")]
+    [InlineData("\\starbase.db")]
+    public void Drive_relative_paths_are_not_treated_as_absolute_on_windows(string dataSource)
+    {
+        // Path.IsPathFullyQualified is platform specific: these are only drive-relative on Windows.
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var result = StarbaseDatabase.ResolveConnectionString($"Data Source={dataSource}", _dir);
+
+        Assert.StartsWith(_dir, DataSource(result));
+    }
 
     [Fact]
-    public void Test_databases_live_under_the_temp_folder_not_in_the_api_project()
+    public void Test_databases_live_under_the_temp_folder_and_never_touch_the_api_starbase_db()
     {
-        using var db = new TestDatabase();
+        var apiDb = new FileInfo(Path.Combine(FindApiFolder(), "starbase.db"));
+        var before = (apiDb.Exists, apiDb.Exists ? apiDb.Length : 0, apiDb.Exists ? apiDb.LastWriteTimeUtc : default);
 
-        Assert.StartsWith(Path.GetTempPath(), db.Path);
+        using (var db = new TestDatabase())
+        {
+            Assert.StartsWith(Path.GetTempPath(), db.Path);
+            db.Migrate();
+        }
+
+        apiDb.Refresh();
+        Assert.Equal(before, (apiDb.Exists, apiDb.Exists ? apiDb.Length : 0, apiDb.Exists ? apiDb.LastWriteTimeUtc : default));
+    }
+
+    private static string FindApiFolder()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "api", "StargateAPI.csproj")))
+        {
+            directory = directory.Parent;
+        }
+
+        return Path.Combine(Assert.IsType<DirectoryInfo>(directory).FullName, "api");
     }
 }

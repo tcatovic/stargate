@@ -17,6 +17,7 @@ A relative `Data Source` is resolved against the API project folder, not the cur
 
 ```bash
 cd exercise1/api
+dotnet restore        # first time on a fresh checkout; `dotnet ef` needs the restored project
 dotnet ef database update
 ```
 
@@ -49,7 +50,7 @@ sqlite3 starbase.db ".schema"                    # optional, if sqlite3 is insta
 | `no such table: Person` | The database was never migrated. Run `dotnet ef database update`. |
 | `starbase.db` is 0 bytes | Something opened it before it was migrated. Run `dotnet ef database update`. |
 | `MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate...` | A database from before `CareerStartDate` became required. The migration changed nothing. Safest: back up the file, set `CareerStartDate` on those rows, then re-run the update. For a disposable development database only: reset (above). |
-| `Database directory '...' does not exist` or `...is relative and this build does not embed the API project folder` | Set an absolute path (below). |
+| `Database directory '...' does not exist` (relative paths only) or `...is relative and this build does not embed the API project folder` | Set an absolute path (below). An absolute path to a folder that does not exist is not checked at startup: the app starts and the first request fails with `unable to open database file`, so create the folder first. |
 
 ### Using a different file
 

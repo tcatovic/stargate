@@ -1,7 +1,7 @@
 ---
 id: NNN
 title: Short imperative title
-status: draft   # draft | ready | planned | approved | in-progress | in-review | done | blocked
+status: draft   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: []   # api | ui | infra | db
 ---
 

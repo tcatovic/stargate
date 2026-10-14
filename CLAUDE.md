@@ -103,7 +103,7 @@ tasks/NNN.md with status: ready          (added separately, see below)
 | security-reviewer, test-reviewer | read-only subagents | Review the diff before the PR |
 | qa-tester | subagent, read-only on source, writes only `docs/qa/` | Runs the real app and tests each acceptance criterion; the PR is blocked unless the verdict is `pass` |
 
-Run unattended with `/loop 30m /advance`: each tick advances one task one step (`ready` -> planned, `approved` -> built and shipped as a PR) and pauses at the gates until you set `status: approved` or merge the PR. Statuses: `draft | ready | planned | approved | in-progress | in-review | done | blocked`.
+Run unattended with `/loop 30m /advance`: each tick advances one task one step (`ready` -> planned, `approved` -> built and shipped as a PR) and pauses at the gates until you set `status: approved` or merge the PR. Statuses: `draft | ready | planned | approved | in-progress | done | blocked`. A task's status lives in its task file on its `task/NNN-slug` branch: `/plan` creates the branch and commits the plan there, you approve by setting `status: approved` on that branch, and `/ship` sets `done` so it takes effect when you merge the PR. `main` only changes through merged PRs.
 
 Rules:
 - Simple tasks (one platform) skip contracts and go to a single developer agent. Multi tasks get contracts from the architect first, and parallel developers each work in their own git worktree.

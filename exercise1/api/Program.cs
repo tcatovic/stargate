@@ -10,8 +10,11 @@ builder.Services.AddControllers();
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
-builder.Services.AddDbContext<StargateContext>(options => 
-    options.UseSqlite(builder.Configuration.GetConnectionString("StarbaseApiDatabase")));
+// Resolved eagerly so a bad or relative path in a Release build fails at startup, not on the first request.
+var connectionString = StarbaseDatabase.ResolveConnectionString(
+    builder.Configuration.GetConnectionString(StarbaseDatabase.ConnectionStringName),
+    StarbaseDatabase.ProjectDirectory);
+builder.Services.AddDbContext<StargateContext>(options => options.UseSqlite(connectionString));
 
 builder.Services.AddMediatR(cfg =>
 {

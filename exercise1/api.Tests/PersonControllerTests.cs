@@ -49,7 +49,7 @@ public class PersonControllerTests
         var combined = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
             await WithController(db, c => c.GetPeople(null, "maj", "commander", CancellationToken.None))).Value);
 
-        Assert.Equal(2, byName.People.Count);
+        Assert.Equal(new[] { "Mira Okafor", "Priya Raman" }.ToHashSet(), byName.People.Select(p => p.Name).ToHashSet());
         Assert.Equal(["Elena Vasquez"], combined.People.Select(p => p.Name));
     }
 

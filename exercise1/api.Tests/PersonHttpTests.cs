@@ -78,10 +78,44 @@ public sealed class PersonHttpTests : IDisposable
         AssertBadRequest(url, key, value);
 
     [Fact]
+    public Task H1b_TooLongPathName_Is400() =>
+        AssertBadRequest($"/Person/{new string('a', 101)}", "name");
+
+    [Theory]
+    [InlineData("/Person?name=abc%0A", "name")]
+    [InlineData("/Person?name=%0Aabc", "name")]
+    [InlineData("/Person?rank=abc%0A", "rank")]
+    [InlineData("/Person?dutyTitle=%0Aabc", "dutyTitle")]
+    [InlineData("/Person/abc%0A", "name")]
+    [InlineData("/Person/%0Aabc", "name")]
+    public Task H2b_NewlinesAreRejected_IncludingATrailingOne(string url, string key) => AssertBadRequest(url, key);
+
+    // Whitespace-only values never reach validation over HTTP: MVC binds them to null (ConvertEmptyStringToNull), the same
+    // as the handler's own "whitespace means no filter" (GetPeopleQueryTests.P10). So a lone tab is 200 with everyone,
+    // exactly like %20 in H7. A tab inside a longer value is a disallowed character and is rejected (H2b covers newlines).
+    [Fact]
+    public async Task H2c_TabOnlyFilter_BindsToNull_AndMeansNoFilter()
+    {
+        var (status, _, json) = await Get("/Person?dutyTitle=%09");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(6, json.GetProperty("people").GetArrayLength());
+    }
+
+    [Fact]
+    public Task H2d_TabInsideAValue_Is400() => AssertBadRequest("/Person?dutyTitle=a%09b", "dutyTitle");
+
+    [Fact]
     public async Task H3_QuoteEqualsInjectionString_FailsTheCharacterRule()
     {
-        await AssertBadRequest("/Person?name=x'%20OR%20'1'%3D'1", "name", "OR");
-        await AssertBadRequest("/Person/x'%20OR%20'1'%3D'1", "name", "OR");
+        foreach (var url in new[] { "/Person?name=x'%20OR%20'1'%3D'1", "/Person/x'%20OR%20'1'%3D'1" })
+        {
+            var (status, body, _) = await Get(url);
+            Assert.Equal(HttpStatusCode.BadRequest, status);
+            Assert.DoesNotContain("1'='1", body);
+            Assert.DoesNotContain("SELECT", body);
+            Assert.DoesNotContain("LIKE", body);
+        }
     }
 
     [Fact]

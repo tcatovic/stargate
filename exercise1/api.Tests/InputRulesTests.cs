@@ -57,5 +57,8 @@ public class InputRulesTests
     [InlineData("a\nb")]
     [InlineData("a\u0000b")]
     [InlineData("O’Brien")]
+    [InlineData("abc\n")]
+    [InlineData("\nabc")]
+    [InlineData("\t")]
     public void R4_DisallowedCharactersAreInvalid(string value) => Assert.False(IsValid(value));
 }

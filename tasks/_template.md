@@ -19,4 +19,6 @@ What is true when this is done, in user-visible or system terms.
 - Things this task must not touch.
 
 ## Notes
+Depends on: none   # or task ids, e.g. `Depends on: 003, 004`. Add a short "Why:" line below if non-obvious.
+
 Links, constraints, domain rules involved (see CLAUDE.md rules 1-7).

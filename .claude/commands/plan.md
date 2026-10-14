@@ -5,7 +5,7 @@ argument-hint: <task id, e.g. 003>
 
 Plan task `$ARGUMENTS`.
 
-1. Read `tasks/$ARGUMENTS-*.md`. It must have `status: ready`; if not, say what is missing and stop.
+1. Read `tasks/$ARGUMENTS-*.md`. It must have `status: ready`, and every task id on its `Depends on:` line must be `status: done` on `main` (the dependency's PR merged); otherwise say what is missing or which dependency is still open, and stop. Plans are written against what is merged, so never plan ahead of an open dependency.
 2. Create the task branch `task/<id>-<slug>` from `main` with `git switch -c` (an untracked or uncommitted task file comes along). If the branch already exists, switch to it. Never write plans on `main`.
 3. Launch the `architect` agent with the task path. It writes `docs/plans/<id>-<slug>.html` and, if the verdict is `multi`, `docs/contracts/<id>/` including `contract.html`.
 4. Set the task to `status: planned` and commit the task file, plan and contracts on the task branch: `docs(task-<id>): plan`.

@@ -5,7 +5,7 @@ argument-hint: <task id, e.g. 003>
 
 You are the tech lead for task `$ARGUMENTS`. You orchestrate; the plan and contracts were written by the architect and approved by the user. Do not change them.
 
-**Preconditions.** Switch to the branch `task/<id>-<slug>`. The task file there has `status: approved`. The only uncommitted change allowed is the task file's approval edit; commit it as `chore(task-<id>): approve plan`. Any other uncommitted change, or no baseline commit on `main`, means stop and say what is wrong.
+**Preconditions.** Every id on the task's `Depends on:` line is `status: done` on `main`; otherwise stop and name the open dependency. Switch to the branch `task/<id>-<slug>`. The task file there has `status: approved`. The only uncommitted change allowed is the task file's approval edit; commit it as `chore(task-<id>): approve plan`. Any other uncommitted change, or no baseline commit on `main`, means stop and say what is wrong.
 
 1. Set the task to `in-progress` and commit.
 2. **Simple plan:** launch one developer agent (`api-dev`, `ui-dev` or `infra-dev` per the plan) with the task, plan path and acceptance criteria.

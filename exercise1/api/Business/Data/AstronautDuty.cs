@@ -19,7 +19,7 @@ namespace StargateAPI.Business.Data
 
         public DateTime? DutyEndDate { get; set; }
 
-        public virtual Person Person { get; set; }
+        public virtual Person? Person { get; set; }
     }
 
     public class AstronautDutyConfiguration : IEntityTypeConfiguration<AstronautDuty>

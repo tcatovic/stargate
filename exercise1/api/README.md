@@ -95,6 +95,18 @@ The API project folder is embedded in **Debug builds only**. A Release build wit
 dotnet run          # Swagger at /swagger in Development
 ```
 
+## Build
+
+Warnings are errors: `exercise1/Directory.Build.props` sets `TreatWarningsAsErrors` for every .NET project under `exercise1/` (including `api.Tests` and any future project), so a plain `dotnet build` fails on any new warning. Fix the code; do not add `NoWarn`, `#pragma warning disable` or `!`. A newer SDK that adds analyzer warnings can also fail the build until they are fixed.
+
+The one exception is the NuGet audit codes NU1900-NU1904 (feed unreachable, and low to critical package advisories). They are currently **warnings only**: they appear in the build output but do not fail the build, because they come from an external feed that changes without a commit. **No CI exists yet to gate vulnerable packages**, so until one does, a vulnerable dependency is visible only in the build output. To turn them back into errors on demand, override the exemption on the command line (a command-line property wins over the props file):
+
+```bash
+dotnet build -p:WarningsNotAsErrors=NU1900   # NU1901-NU1904 now fail the build; NU1900 (feed unreachable) stays a warning
+```
+
+Verified with `SharpZipLib 1.3.0` added to a scratch copy: a plain build succeeded with NU1902/NU1903 warnings, and the command above failed with `error NU1902` and `error NU1903`. (`dotnet list package --vulnerable` is not a gate: it exits 0 even when it finds vulnerabilities.)
+
 ## Test
 
 ```bash

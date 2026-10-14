@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 005: Make the .NET build warning-free and enforce warnings as errors</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2330; --muted: #5a6475; --card: #f5f7fa; --border: #d9dee7;
+    --accent: #2457c5; --ok: #1d7a3d; --warn: #9a6200; --bad: #b42318; --code: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --fg: #e4e8ef; --muted: #9aa4b4; --card: #1a2029; --border: #2c3442;
+      --accent: #7aa2ff; --ok: #5fcf86; --warn: #f0b44c; --bad: #ff7b72; --code: #1f2633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+  h1 { font-size: 1.55rem; line-height: 1.25; margin: .5rem 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  p, li { overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: .92rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+  code { background: var(--code); padding: .08em .3em; border-radius: 4px; }
+  pre { background: var(--code); padding: .8rem; border-radius: 8px; overflow-x: auto; line-height: 1.4; }
+  pre code { background: none; padding: 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem; margin: .8rem 0; }
+  .verdict { border-left: 5px solid var(--accent); }
+  .warn { border-left: 5px solid var(--warn); }
+  .bad { border-left: 5px solid var(--bad); }
+  .tag { display: inline-block; font-size: .78rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; }
+  .tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); } .tag.info { color: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .55rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  nav ol { columns: 2; column-gap: 2rem; padding-left: 1.2rem; }
+  @media (max-width: 560px) { nav ol { columns: 1; } body { font-size: 15px; } }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 005 &middot; branch <code>task/005-warning-free-api-build</code> &middot; baseline: <code>main</code> at 1eb8417 (tasks 003 and 004 merged) &middot; status: awaiting approval</p>
+<h1>Plan 005: Make the .NET build warning-free and enforce warnings as errors</h1>
+
+<div class="card warn">
+<p><strong>Revision 2: scope reduced by the user. This is now a no-behaviour-change task.</strong></p>
+<p>The duties task will rewrite both duty endpoints: <code>GET /AstronautDuty/{name}</code> and <code>POST /AstronautDuty</code>, including their controller, pre-processor and handlers. Warnings 4-6 sit in handler code that no request can reach today. Building a real 404 path now would be thrown away, and it would add a breaking change.</p>
+<p>Removed from revision 1:</p>
+<ul>
+  <li>the controller and pre-processor changes;</li>
+  <li>the POST 400 to 404 change and its changelog entry;</li>
+  <li>the parameterised person lookup;</li>
+  <li>the eleven behaviour tests;</li>
+  <li>Q1.</li>
+</ul>
+<p>All of these are recorded in <a href="#deferred">section 11, Deferred to the duties task</a>. The decisions that are kept (warnings 1-3, <code>Directory.Build.props</code>, NuGet audit handling) are unchanged.</p>
+</div>
+
+<nav aria-label="Contents">
+<ol>
+  <li><a href="#summary">Summary and verdict</a></li>
+  <li><a href="#assumptions">Task assumptions checked</a></li>
+  <li><a href="#current">Current behaviour</a></li>
+  <li><a href="#approach">Approach and decisions</a></li>
+  <li><a href="#changes">Changes by platform</a></li>
+  <li><a href="#contracts">Contracts affected</a></li>
+  <li><a href="#rules">Domain rules</a></li>
+  <li><a href="#tests">Tests</a></li>
+  <li><a href="#qa">QA checklist</a></li>
+  <li><a href="#risks">Risks and rollout</a></li>
+  <li><a href="#deferred">Deferred to the duties task</a></li>
+  <li><a href="#unverified">Unverified items</a></li>
+  <li><a href="#questions">Questions for the user</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and verdict</h2>
+<div class="card verdict">
+<p><strong>Verdict: <span class="tag info">simple</span></strong>. One api-dev agent does the work, with no contracts folder.</p>
+<p>The changes are:</p>
+<ul>
+  <li>three nullable annotations;</li>
+  <li>two null guards in handler code that no request reaches today;</li>
+  <li>a new <code>exercise1/Directory.Build.props</code>;</li>
+  <li>one line removed from the test csproj;</li>
+  <li>a few unit tests;</li>
+  <li>a README build note.</li>
+</ul>
+<p>All of it is in <code>exercise1/api</code> and <code>exercise1/api.Tests</code>. Schema, migrations, controllers, pre-processors, the UI and every HTTP response stay unchanged. There is nothing to split into parallel work.</p>
+</div>
+<p>The problem is real. A clean build of the baseline (<code>dotnet build --no-incremental</code>, SDK 10.0.402) reports <strong>exactly the 6 warnings listed in the task and 0 errors</strong>, all in <code>StargateAPI.csproj</code>. <code>api.Tests</code> has no warnings of its own and already sets <code>TreatWarningsAsErrors</code> in its own csproj. <code>StargateAPI.csproj</code> does not, so a plain <code>dotnet build</code> passes with warnings.</p>
+<p>I built a prototype in a scratch copy, with the same annotations and props file and an equivalent guard. Results:</p>
+<ul>
+  <li>0 warnings, and <code>-warnaserror</code> passes;</li>
+  <li>all 61 existing tests pass;</li>
+  <li><code>dotnet ef migrations has-pending-model-changes</code> reports "No changes have been made to the model since the last migration";</li>
+  <li><code>TreatWarningsAsErrors</code> resolves to <code>true</code> in both projects;</li>
+  <li>a deliberate CS0168 fails a plain build.</li>
+</ul>
+<p>Nothing was left in the repo.</p>
+
+<h2 id="assumptions">2. Task assumptions checked</h2>
+<div class="card">
+<p>Two things in the task do not match the code, and both support the reduced scope.</p>
+<ul>
+  <li><strong>The duties GET route does not run the duties handler.</strong> <code>GET /AstronautDuty/{name}</code> sends <code>GetPersonByName</code> (<code>Controllers/AstronautDutyController.cs:24</code>), not <code>GetAstronautDutiesByName</code>. I ran it on the seeded Development database: an unknown name returns <strong>200</strong> <code>{"person":null,"success":true,"message":"Successful","responseCode":200}</code>, not a 500. Nothing reaches <code>GetAstronautDutiesByNameHandler</code> today, so warnings 4 and 5 are in dead code.</li>
+  <li><strong>POST with an unknown person returns 400, not a NullReferenceException.</strong> <code>POST /AstronautDuty</code> with an unknown person is rejected by <code>CreateAstronautDutyPreProcessor</code> (<code>Business/Commands/CreateAstronautDuty.cs:33-35</code>), which throws <code>BadHttpRequestException</code>. I ran it in Development: the response is <strong>400</strong> and the body is the developer exception page (a stack trace). The handler's null dereference (<code>:60</code>, warning 6) is reached only if the pre-processor is bypassed. No request can do that today.</li>
+</ul>
+<p>So the guards below only satisfy the compiler. They change no observable behaviour. The duties task owns the real behaviour of both endpoints.</p>
+</div>
+
+<h2 id="current">3. Current behaviour</h2>
+<h3>3.1 Exact warning list (clean build of 1eb8417)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Location</th><th>Code</th><th>Cause</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>api/Business/Data/AstronautDetail.cs(22,31)</code></td><td>CS8618</td><td><code>public virtual Person Person { get; set; }</code> is never initialised</td></tr>
+<tr><td>2</td><td><code>api/Business/Data/AstronautDuty.cs(22,31)</code></td><td>CS8618</td><td>same as 1</td></tr>
+<tr><td>3</td><td><code>api/Business/Queries/GetAstronautDutiesByName.cs(47,32)</code></td><td>CS8618</td><td><code>GetAstronautDutiesByNameResult.Person</code> is non-nullable</td></tr>
+<tr><td>4</td><td><code>GetAstronautDutiesByName.cs(32,29)</code></td><td>CS8601</td><td><code>result.Person = person;</code>, where Dapper returns null when no row matches</td></tr>
+<tr><td>5</td><td><code>GetAstronautDutiesByName.cs(34,60)</code></td><td>CS8602</td><td><code>person.PersonId</code> in the second query</td></tr>
+<tr><td>6</td><td><code>api/Business/Commands/CreateAstronautDuty.cs(60,62)</code></td><td>CS8602</td><td><code>person.Id</code> after the handler's person lookup</td></tr>
+</tbody></table></div>
+<p>Today there are no NuGet audit warnings (NU19xx). <code>NuGetAudit</code> is <code>true</code>, which is the default.</p>
+
+<h3>3.2 Relevant code</h3>
+<ul>
+  <li><code>Business/Data/Person.cs:26-27</code>: both relationships are configured with <code>HasForeignKey(z =&gt; z.PersonId)</code> on a non-nullable <code>int PersonId</code>. The snapshot marks both <code>.IsRequired()</code> (<code>StargateContextModelSnapshot.cs:98-102, 109-113</code>).</li>
+  <li><code>GetPersonByName.cs:38</code> already declares <code>PersonAstronaut? Person</code>. MVC uses the default System.Text.Json settings, with no <code>DefaultIgnoreCondition</code>. A null is therefore written as <code>"person": null</code>, not omitted. I saw this on <code>GET /Person/Nobody</code>.</li>
+  <li><code>Controllers/BaseResponse.cs:7-9</code> gives the defaults <code>Success=true</code>, <code>Message="Successful"</code> and <code>ResponseCode=200</code>. <code>ControllerBaseExtensions.cs:8-13</code> copies <code>ResponseCode</code> into the HTTP status.</li>
+</ul>
+
+<h2 id="approach">4. Approach and decisions</h2>
+<h3>D1. Navigation properties: <code>Person?</code>, not <code>required</code> (warnings 1 and 2)</h3>
+<p><code>AstronautDetail.Person</code> and <code>AstronautDuty.Person</code> become <code>public virtual Person? Person { get; set; }</code>. This is accurate: entities read through Dapper, or through <code>AsNoTracking</code> without <code>Include</code>, really do have a null navigation.</p>
+<p>The relationship stays required. EF takes requiredness from the non-nullable <code>int PersonId</code> foreign key, not from the navigation. I checked this in the scratch copy: <code>has-pending-model-changes</code> reports no changes and the snapshot is unchanged.</p>
+<p><em>Rejected: <code>required Person Person</code>.</em></p>
+<ul>
+  <li>Every <code>new AstronautDetail { ... }</code> and <code>new AstronautDuty { ... }</code> would then have to set <code>Person</code>, or fail with CS9035. That includes <code>CreateAstronautDuty.cs:66</code> and <code>:100</code>, <code>DevelopmentSeedData</code> and the tests.</li>
+  <li>It would also promise something Dapper reads do not deliver.</li>
+</ul>
+
+<h3>D2. <code>GetAstronautDutiesByNameResult.Person</code> becomes <code>PersonAstronaut?</code> (warning 3)</h3>
+<p>This matches <code>GetPersonByNameResult</code> and the UI type <code>person: PersonAstronaut | null</code> (<code>ui/src/app/api/models.ts:35</code>). The JSON name and type stay the same.</p>
+
+<h3>D3. Smallest guard in <code>GetAstronautDutiesByNameHandler</code> (warnings 4 and 5). No request reaches this today.</h3>
+<p>Insert this straight after the first query (<code>:30</code>), before <code>result.Person = person;</code>:</p>
+<pre><code>if (person is null)
+{
+    return result;
+}</code></pre>
+<p>The returned <code>result</code> has <code>Person</code> = null and an empty <code>AstronautDuties</code> list. It keeps the <code>BaseResponse</code> defaults (<code>Success=true</code>, <code>"Successful"</code>, 200), which is what the existing person lookup also returns for an unknown name.</p>
+<p>There is deliberately no 404 here. Choosing the status for an unknown name belongs to the duties task, and nothing calls this handler today (section 2). Writing the null check as an early return also fixes warning 4 without a separate change.</p>
+
+<h3>D4. Smallest guard in <code>CreateAstronautDutyHandler</code> (warning 6). No request reaches this today.</h3>
+<p>Insert this straight after the person lookup (<code>:58</code>), before the line at <code>:60</code>:</p>
+<pre><code>if (person is null)
+{
+    return new CreateAstronautDutyResult
+    {
+        Success = false,
+        Message = "Person not found",
+        ResponseCode = (int)HttpStatusCode.NotFound
+    };
+}</code></pre>
+<ul>
+  <li><code>System.Net</code> is already imported.</li>
+  <li>The message is fixed and does not echo the name.</li>
+  <li>Nothing is written: the guard returns before any <code>Add</code> or <code>SaveChangesAsync</code>.</li>
+  <li>The pre-processor stays unchanged and still rejects every unknown name with 400 before the handler runs. This branch is a defensive guard only, and HTTP behaviour stays exactly as today.</li>
+  <li>The handler's interpolated lookup at <code>:56-58</code> is left as it is. See the known risk in section 10.</li>
+</ul>
+
+<h3>D5. <code>exercise1/Directory.Build.props</code></h3>
+<pre><code>&lt;Project&gt;
+  &lt;!-- Every .NET project under exercise1/ fails the build on any warning (CLAUDE.md: warnings as errors). --&gt;
+  &lt;PropertyGroup&gt;
+    &lt;TreatWarningsAsErrors&gt;true&lt;/TreatWarningsAsErrors&gt;
+    &lt;!-- NuGet audit results come from an external feed that changes without a commit (NU1900 = feed unreachable,
+         NU1901-NU1904 = low..critical advisory). They are still reported as warnings, but must not break every
+         branch the day an advisory is published or the feed is offline. Gate them in CI instead. --&gt;
+    &lt;WarningsNotAsErrors&gt;$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904&lt;/WarningsNotAsErrors&gt;
+  &lt;/PropertyGroup&gt;
+&lt;/Project&gt;</code></pre>
+<ul>
+  <li><strong>Scope.</strong> MSBuild uses the nearest <code>Directory.Build.props</code> above each project, and there is none in the repo today. Both <code>api</code> and <code>api.Tests</code> inherit this file, and so will any future project. <code>exercise1/ui</code> is not an MSBuild project and is not affected. I checked with <code>dotnet msbuild -getProperty:TreatWarningsAsErrors</code>: it prints <code>true</code> for both projects.</li>
+  <li><strong>Test csproj.</strong> Remove the duplicate <code>&lt;TreatWarningsAsErrors&gt;true&lt;/TreatWarningsAsErrors&gt;</code> from <code>StargateAPI.Tests.csproj:8</code>, so the setting lives in one place.</li>
+  <li><strong><code>-warnaserror</code> on the command line.</strong> The SDK copies <code>WarningsNotAsErrors</code> into <code>MSBuildWarningsNotAsErrors</code>; I checked this with <code>-getProperty</code>. So <code>dotnet build -warnaserror</code>, the CLAUDE.md command, honours the same exception list. I have not yet seen a real advisory stay a warning under it (section 12).</li>
+  <li><strong>Why this is not a suppression.</strong> No compiler warning is exempt and <code>NoWarn</code> is untouched. Audit findings still print. The only thing excluded from failing the build is supply-chain data that changes without any commit.</li>
+  <li><em>Rejected: NU190x as errors.</em> A newly published advisory, or the sandbox firewall blocking the audit feed (NU1900), would break every build on every branch with no change in the repo.</li>
+  <li><strong><code>dotnet ef</code> and design-time builds.</strong> <code>dotnet ef</code> builds the project first, so a warning will now block <code>migrations add</code> and <code>database update</code>. That is intended. Scaffolded migrations compile cleanly: both existing ones do, and they carry <code>#nullable disable</code>. IDE design-time builds will also show warnings as errors.</li>
+  <li><strong>SDK roll-forward.</strong> <code>global.json</code> pins 10.0.100 with <code>latestFeature</code>, and the sandbox runs 10.0.402. A newer SDK that adds analyzer warnings will fail the build until those warnings are fixed. That is the policy working as intended, and the README will say so.</li>
+</ul>
+
+<h2 id="changes">5. Changes by platform</h2>
+<h3>api</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>exercise1/Directory.Build.props</code> (new)</td><td>Exact content as in D5</td></tr>
+<tr><td><code>api/Business/Data/AstronautDetail.cs:22</code></td><td><code>Person?</code> (D1)</td></tr>
+<tr><td><code>api/Business/Data/AstronautDuty.cs:22</code></td><td><code>Person?</code> (D1)</td></tr>
+<tr><td><code>api/Business/Queries/GetAstronautDutiesByName.cs</code></td><td><code>PersonAstronaut?</code> at <code>:47</code>, plus the null guard after <code>:30</code> (D2, D3)</td></tr>
+<tr><td><code>api/Business/Commands/CreateAstronautDuty.cs</code></td><td>Null guard in the handler after <code>:58</code> only (D4). The pre-processor and the rest of the handler are untouched.</td></tr>
+<tr><td><code>api/README.md</code></td><td>A short build note: warnings are errors through <code>Directory.Build.props</code>, with the NU190x exception and its reason. No changelog entry, because nothing breaks.</td></tr>
+</tbody></table></div>
+<p>Not touched:</p>
+<ul>
+  <li>controllers;</li>
+  <li><code>Program.cs</code> (pre-processor registration);</li>
+  <li><code>CreateAstronautDutyPreProcessor</code>;</li>
+  <li><code>StargateAPI.csproj</code>;</li>
+  <li>migrations and the snapshot;</li>
+  <li><code>GetPersonByName.cs</code>, <code>GetPeople.cs</code> and the DTOs.</li>
+</ul>
+<h3>api.Tests</h3>
+<p>Remove line 8 of <code>StargateAPI.Tests.csproj</code> (D5) and add the tests in section 8. No new packages are needed: MediatR, EF Core Sqlite and MVC types are already available through the existing <code>ProjectReference</code>.</p>
+<h3>ui, infra, db</h3>
+<p>None. There is no migration and no change to the model snapshot.</p>
+
+<h2 id="contracts">6. Contracts affected</h2>
+<p><strong>None. Nothing is breaking.</strong></p>
+<ul>
+  <li>Every endpoint returns the same statuses and bodies as before. That includes <code>POST /AstronautDuty</code> for an unknown person, which stays a 400 from the pre-processor.</li>
+  <li>The two guards sit in code paths no request reaches today.</li>
+  <li>The nullable annotations do not change JSON property names, types, or null handling.</li>
+</ul>
+
+<h2 id="rules">7. Domain rules</h2>
+<p>No rule logic changes.</p>
+<ul>
+  <li><strong>Rule 2</strong> (a person with no assignment has no detail or duty rows): the add-duty guard returns before writing anything. Test U2 checks this.</li>
+  <li><strong>Rule 1</strong> and <strong>rules 3-7</strong>: the code is unchanged, and the known defects remain with tasks 001, 006 and the duties task.</li>
+</ul>
+
+<h2 id="tests">8. Tests (api.Tests, existing infrastructure, no new packages)</h2>
+<p>Each test gets its own <code>TestDatabase</code>: call <code>Migrate()</code>, seed through <code>CreateContext()</code>, then construct the handler directly with a <code>StargateContext</code>. Dapper opens the EF connection itself.</p>
+<p>The guard tests call the handlers directly, on purpose. That is the only way to reach these branches, and it is exactly what the guards protect against.</p>
+<h3>New file <code>api.Tests/NullPersonGuardTests.cs</code></h3>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Given / When / Then</th></tr></thead>
+<tbody>
+<tr><td>U1</td><td><strong>Given</strong> a migrated database with one seeded person. <strong>When</strong> <code>GetAstronautDutiesByNameHandler.Handle</code> runs for <code>"Nobody"</code>. <strong>Then</strong> there is no exception, <code>Person</code> is null, <code>AstronautDuties</code> is empty, and <code>ResponseCode</code>/<code>Success</code>/<code>Message</code> keep their defaults (200, true, "Successful").</td></tr>
+<tr><td>U2</td><td><strong>Given</strong> a migrated database with one seeded person, and <code>db.Dump()</code> captured. <strong>When</strong> <code>CreateAstronautDutyHandler.Handle</code> runs directly for <code>"Nobody"</code>, bypassing the pre-processor. <strong>Then</strong> there is no exception, <code>ResponseCode</code> is 404, <code>Success</code> is false, <code>Message</code> is "Person not found" and does not contain the name, <code>Id</code> is null, and <code>db.Dump()</code> is unchanged.</td></tr>
+<tr><td>U3</td><td><strong>Given</strong> a person with two duties. <strong>When</strong> <code>GetAstronautDutiesByNameHandler</code> runs for that name. <strong>Then</strong> it returns 200, <code>Person.Name</code> matches, and both duties come back ordered by <code>DutyStartDate</code> descending. This proves the guard did not change the success path.</td></tr>
+</tbody></table></div>
+<p class="meta">Do not use injection-style names in U2. That handler's lookup is still interpolated (section 10), so such a name could match the seeded person. Use a plain unknown name.</p>
+<h3>New file <code>api.Tests/ResponseShapeTests.cs</code> (pins the unchanged success shapes)</h3>
+<p>Each test serialises with <code>new JsonSerializerOptions(JsonSerializerDefaults.Web)</code>, which is what MVC uses by default, and asserts the exact set of property names.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Given / When / Then</th></tr></thead>
+<tbody>
+<tr><td>S1</td><td><strong>Given</strong> a <code>GetAstronautDutiesByNameResult</code> shaped as the handler builds it: the duties come from Dapper, so each <code>AstronautDuty.Person</code> is null. <strong>When</strong> it is serialised. <strong>Then</strong> the top-level names are exactly {<code>person</code>, <code>astronautDuties</code>, <code>success</code>, <code>message</code>, <code>responseCode</code>}; <code>person</code> has exactly the six <code>PersonAstronaut</code> names; and each duty has exactly {<code>id</code>, <code>personId</code>, <code>rank</code>, <code>dutyTitle</code>, <code>dutyStartDate</code>, <code>dutyEndDate</code>, <code>person</code>}, with <code>person</code> null, as it was before.</td></tr>
+<tr><td>S2</td><td><strong>Given</strong> a <code>GetPersonByNameResult</code>, once with a person and once with none. <strong>Then</strong> the names are exactly {<code>person</code>, <code>success</code>, <code>message</code>, <code>responseCode</code>}, and <code>"person": null</code> is present when there is no person, not omitted.</td></tr>
+<tr><td>S3</td><td><strong>Given</strong> a successful <code>CreateAstronautDutyResult</code>. <strong>Then</strong> the names are exactly {<code>id</code>, <code>success</code>, <code>message</code>, <code>responseCode</code>}.</td></tr>
+</tbody></table></div>
+<p class="meta">Write S1-S3 first and run them against the baseline. They must pass unchanged: they record today's shape and must not define a new one.</p>
+<h3>Warnings-as-errors check</h3>
+<p>This cannot be an xUnit test, because a test cannot observe the compile it is part of. It is covered by manual QA (step 4 in section 9) and by <code>dotnet msbuild -getProperty:TreatWarningsAsErrors</code>, which must print <code>true</code> in both projects.</p>
+
+<h2 id="qa">9. QA checklist (qa-tester)</h2>
+<ol>
+  <li><strong>Build.</strong> In <code>exercise1/api</code>, <code>dotnet build --no-incremental</code> gives 0 warnings and 0 errors. <code>dotnet build ../api.Tests --no-incremental</code> gives the same.</li>
+  <li><strong><code>-warnaserror</code>.</strong> <code>dotnet build -warnaserror</code> succeeds.</li>
+  <li><strong>Property check.</strong> <code>dotnet msbuild -getProperty:TreatWarningsAsErrors</code> prints <code>true</code> in both <code>api</code> and <code>api.Tests</code>, and the test csproj no longer sets it itself.</li>
+  <li><strong>Deliberate warning, both projects.</strong>
+    <ol>
+      <li>Add <code>class W { void M() { int unused; } }</code> to <code>api</code>. A plain <code>dotnet build</code> must fail with <code>error CS0168</code>. Remove the file.</li>
+      <li>Add the same class to <code>api.Tests</code> only, since a failure in <code>api</code> would hide it. <code>dotnet build ../api.Tests</code> must fail with CS0168. Remove the file.</li>
+      <li><code>git status</code> must be clean.</li>
+    </ol>
+  </li>
+  <li><strong>Model and migrations.</strong> <code>dotnet ef migrations has-pending-model-changes</code> prints "No changes...", and <code>git diff main -- exercise1/api/Business/Migrations</code> is empty.</li>
+  <li><strong>Tests.</strong> <code>dotnet test ../api.Tests</code> passes in Debug, and <code>dotnet test ../api.Tests -c Release</code> passes too (61 existing tests plus the new ones).</li>
+  <li><strong>No suppressions.</strong> <code>git diff main</code> introduces no <code>!</code> null-forgiving operator, <code>#pragma warning</code>, <code>SuppressMessage</code>, <code>NoWarn</code>, or <code>&lt;Nullable&gt;</code> change. Controllers, <code>Program.cs</code> and <code>CreateAstronautDutyPreProcessor</code> have no diff at all.</li>
+  <li><strong>Success responses before and after, seeded Development database.</strong>
+    <ol>
+      <li>Run the baseline (<code>main</code>) and then this branch, each in Development on a fresh <code>starbase.db</code> seeded by task 004.</li>
+      <li>Record the status and body of: <code>GET /Person</code>, <code>GET /Person/Mira%20Okafor</code>, <code>GET /Person/Nobody</code>, <code>GET /AstronautDuty/Mira%20Okafor</code>, <code>GET /AstronautDuty/Nobody</code>, and <code>POST /AstronautDuty</code> for <code>Kenji Watanabe</code> with a new duty.</li>
+      <li>The two runs must be byte-identical, ids included, because both start from the same fresh seed.</li>
+    </ol>
+  </li>
+  <li><strong>Unknown person on POST, before and after.</strong> <code>POST /AstronautDuty</code> with <code>"name":"Nobody"</code> must return <strong>400</strong> on both builds, with the developer exception page body in Development. Record both. A 404 here would be a defect for this task.</li>
+</ol>
+
+<h2 id="risks">10. Risks and rollout</h2>
+<ul>
+  <li><strong>Data.</strong> None. There is no migration, the model is unchanged (checked), and no row is touched.</li>
+  <li><strong>Behaviour.</strong> None is observable. The guards sit in paths no request reaches, and every endpoint keeps its current responses.</li>
+  <li><strong>Known, unchanged risk: SQL injection in the duty handlers.</strong> This task does not introduce it, does not widen it, and does not fix it. Both handlers, and <code>GetPersonByName</code>, still build SQL from the name by string interpolation (<code>GetAstronautDutiesByName.cs:28</code>, <code>CreateAstronautDuty.cs:56</code>, <code>GetPersonByName.cs:26</code>). The pre-processor is unchanged, so <code>CreateAstronautDutyHandler</code>'s interpolated lookup is reached only for names that an EF parameterised query has already matched to a real person, exactly as today. <code>GetPersonByName</code> stays reachable with any input over HTTP, as today. Fixing it is owned by task 001 (<code>GetPersonByName</code>) and the duties task (both duty handlers).</li>
+  <li><strong>Other branches.</strong> After this merges, any branch for 001, 002 or 006 that adds warnings will fail to build. That is intended: per the task, those branches must fix their warnings, not suppress them. Merge this one first. Expect small conflicts with the duties task in the two handler files, where it replaces the guards anyway.</li>
+  <li><strong>Supply chain.</strong> NU190x stay warnings (D5). Until CI exists, a new advisory shows up only as a build warning. Recommended follow-up: a CI step that runs <code>dotnet list package --vulnerable --include-transitive</code> and fails on high or critical findings.</li>
+  <li><strong>Rollback.</strong> Revert the commit. Nothing persists outside the code.</li>
+</ul>
+
+<h2 id="deferred">11. Deferred to the duties task</h2>
+<div class="card warn">
+<p>These items were in revision 1 and are not built in 005. They are recorded so they are not lost.</p>
+<ul>
+  <li><strong>GET 404 over HTTP.</strong> <code>GET /AstronautDuty/{name}</code> should return 404 with a <code>BaseResponse</code> body when the name is unknown (<code>responseCode</code> equal to the HTTP status). That needs the controller rewired from <code>GetPersonByName</code> to <code>GetAstronautDutiesByName</code> (<code>AstronautDutyController.cs:24</code>). The success response then gains <code>astronautDuties</code>, which is an additive shape change. The UI types already expect it (<code>models.ts:34-37</code>), but it is still a contract change to record.</li>
+  <li><strong>POST 404 over HTTP.</strong> <code>POST /AstronautDuty</code> for an unknown person should return 404 with a <code>BaseResponse</code> body instead of 400 and a stack trace. A pre-processor cannot return a response, so either the unknown-person check moves into the handler, or a global exception handler maps a not-found exception to ProblemDetails, which CLAUDE.md prefers. If the pre-processor stops rejecting unknown names, the handler's person lookup <strong>must be parameterised first</strong>. Otherwise a name such as <code>x' OR '1'='1</code> would match an existing person and write a duty to them. This is a breaking status change (400 to 404) and needs a changelog entry.</li>
+  <li><strong>Lookup order.</strong> An unknown person should get 404 before the duplicate check (title plus start date) runs. The current duplicate check is also global rather than per person.</li>
+  <li><strong>Names with apostrophes.</strong> A real name containing <code>'</code> passes the pre-processor today but breaks the handler's interpolated SQL, giving a 500 (expected from the code; not run). This goes away once the lookup is parameterised.</li>
+  <li><strong>Behaviour tests.</strong> Unknown name, hostile names, a colliding duty for an unknown person, the success path through the MediatR pipeline, the duplicate-duty 400, HTTP status equal to <code>responseCode</code> at the controller, and the apostrophe name. Each POST test should compare database dumps before and after.</li>
+  <li><strong>Remove the interim guards.</strong> The guards added in D3 and D4 are interim. The duties task replaces them with the real behaviour.</li>
+</ul>
+</div>
+
+<h2 id="unverified">12. Unverified items (with cheap checks)</h2>
+<ul>
+  <li><strong>A real NU1903 stays a warning under <code>-warnaserror</code>.</strong> The property mapping is checked, but no live advisory fired during the probe.
+    <ul>
+      <li>Check: in a scratch copy, add <code>&lt;PackageReference Include="System.Text.Json" Version="8.0.0" /&gt;</code> to <code>api</code> and run <code>dotnet build -warnaserror</code>. Expect an NU1903 warning and "Build succeeded".</li>
+      <li>If the build fails instead, also list the codes in <code>MSBuildWarningsNotAsErrors</code>, and api-dev reports back.</li>
+    </ul>
+  </li>
+  <li><strong>Deliberate warning in <code>api.Tests</code> without the csproj line.</strong> Only the <code>api</code> half of this check ran, because the failure in <code>api</code> stopped the build. QA step 4 covers it.</li>
+  <li><strong><code>dotnet test -c Release</code>.</strong> Not run. Only Debug was run (61 tests pass). QA step 6 covers it.</li>
+  <li><strong>The exact D3/D4 guards.</strong> The prototype used an equivalent guard that returned 404 from the GET handler. The D3 guard returns the default result instead. The difference cannot be seen over HTTP, and U1 and U2 cover both guards.</li>
+</ul>
+
+<h2 id="questions">13. Questions for the user</h2>
+<p>None blocking. Q1 from revision 1 no longer applies, because the controller is not touched.</p>
+<p>One decision remains for you to confirm. The plan keeps NU1900-NU1904 as warnings rather than errors (D5), and I recommend accepting that. The alternative is to keep NU1903/NU1904 (high and critical) as errors. That is stricter, but any newly published advisory would then break every branch's build without warning.</p>
+
+</main>
+</body>
+</html>

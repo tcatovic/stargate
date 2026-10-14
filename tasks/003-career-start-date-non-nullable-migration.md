@@ -1,7 +1,7 @@
 ---
 id: 003
 title: Make AstronautDetail.CareerStartDate non-nullable and document database creation
-status: in-progress
+status: done
 platforms: [api, db]
 ---
 

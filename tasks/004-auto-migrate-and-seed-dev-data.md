@@ -1,7 +1,7 @@
 ---
 id: 004
 title: Apply migrations and seed development data on startup in Development
-status: in-progress
+status: done
 platforms: [api, db]
 ---
 

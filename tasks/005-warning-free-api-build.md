@@ -1,7 +1,7 @@
 ---
 id: 005
 title: Make the .NET build warning-free and enforce warnings as errors
-status: in-progress   # draft | ready | planned | approved | in-progress | done | blocked
+status: done   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api]   # api | ui | infra | db
 ---
 

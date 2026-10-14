@@ -1,0 +1,218 @@
+# Contract for task 001: filter people by name, rank and current duty title.
+# Only the endpoints this task changes. JSON is camelCase (MVC JsonSerializerDefaults.Web).
+# Every property listed under `required` is always present in the body; nullability is explicit.
+openapi: 3.0.3
+info:
+  title: Stargate ACTS API - task 001 contract
+  version: "001"
+paths:
+  /Person:
+    get:
+      operationId: GetPeople
+      tags: [Person]
+      summary: List people, optionally filtered by name, current rank and current duty title
+      description: >
+        Filters combine with AND; an omitted, empty or whitespace-only filter does not filter.
+        Values are trimmed before matching. `name` is a case-insensitive contains match;
+        `rank` and `dutyTitle` are case-insensitive exact matches against the person's current
+        AstronautDetail values. People with no astronaut assignment are returned when no rank or
+        dutyTitle filter is given, and are never matched by a rank or dutyTitle filter.
+        Case-insensitivity folds ASCII letters only (SQLite NOCASE/LIKE): a non-ASCII letter matches only in the same case.
+        Order of `people` is unspecified. No paging.
+      parameters:
+        - $ref: "#/components/parameters/NameFilter"
+        - $ref: "#/components/parameters/RankFilter"
+        - $ref: "#/components/parameters/DutyTitleFilter"
+      responses:
+        "200":
+          description: Matching people (possibly an empty list). Never 404.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GetPeopleResult" }
+              examples:
+                filtered:
+                  value:
+                    success: true
+                    message: Successful
+                    responseCode: 200
+                    people:
+                      - personId: 4
+                        name: Priya Raman
+                        currentRank: MAJ
+                        currentDutyTitle: Mission Specialist
+                        careerStartDate: "2019-09-02T00:00:00"
+                        careerEndDate: null
+                noMatch:
+                  value: { success: true, message: Successful, responseCode: 200, people: [] }
+                unassignedPerson:
+                  value:
+                    success: true
+                    message: Successful
+                    responseCode: 200
+                    people:
+                      - { personId: 1, name: Mira Okafor, currentRank: "", currentDutyTitle: "", careerStartDate: null, careerEndDate: null }
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+  /Person/{name}:
+    get:
+      operationId: GetPersonByName
+      tags: [Person]
+      summary: Get one person by exact name (case-insensitive)
+      description: >
+        The route value is URL-decoded and trimmed, then matched exactly, ignoring ASCII case.
+        `%` and `_` have no wildcard meaning. If several stored names differ only by case
+        (possible until task 002 adds the unique index), an exact-case match wins, then the lowest personId.
+        Unknown name returns 404 (breaking: previously 200 with person null).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: The person's full name, URL-encoded (e.g. `Mira%20Okafor`, `O%27Brien`).
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+            pattern: "^[\\p{L}\\p{M}0-9 .'-]+$"
+      responses:
+        "200":
+          description: Person found. `person` is never null with this status.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GetPersonByNameResult" }
+              example:
+                success: true
+                message: Successful
+                responseCode: 200
+                person: { personId: 2, name: Kenji Watanabe, currentRank: "", currentDutyTitle: "", careerStartDate: null, careerEndDate: null }
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "404":
+          description: No person with that name. Body is the same envelope with person null; message is exactly "Person not found" and never echoes the input.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GetPersonByNameResult" }
+              example: { success: false, message: Person not found, responseCode: 404, person: null }
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+components:
+  parameters:
+    NameFilter:
+      name: name
+      in: query
+      required: false
+      description: Case-insensitive "contains" match on the person's name. Empty or whitespace-only means no filter.
+      schema: { $ref: "#/components/schemas/FilterValue" }
+    RankFilter:
+      name: rank
+      in: query
+      required: false
+      description: Case-insensitive exact match on the current rank (e.g. MAJ). Excludes people with no assignment.
+      schema: { $ref: "#/components/schemas/FilterValue" }
+    DutyTitleFilter:
+      name: dutyTitle
+      in: query
+      required: false
+      description: Case-insensitive exact match on the current duty title (e.g. Commander, RETIRED). Excludes people with no assignment.
+      schema: { $ref: "#/components/schemas/FilterValue" }
+
+  responses:
+    ValidationFailed:
+      description: >
+        Invalid input: longer than 100 characters, or a character outside letters, digits, space,
+        hyphen, apostrophe, period; or (path only) blank. Produced by ASP.NET Core [ApiController]
+        model validation before any handler runs. `errors` keys are the parameter names
+        (`name`, `rank`, `dutyTitle`); messages are human-readable, not for parsing, and never contain the submitted value.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ValidationProblemDetails" }
+          example:
+            type: https://tools.ietf.org/html/rfc9110#section-15.5.1
+            title: One or more validation errors occurred.
+            status: 400
+            errors:
+              name: ["Use only letters, digits, spaces, hyphens, apostrophes and periods (at most 100 characters)."]
+            traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
+    ServerError:
+      description: Unexpected fault. The body is empty in Production (developer exception page in Development only). Clients must not parse it. Never contains exception text.
+
+  schemas:
+    FilterValue:
+      type: string
+      maxLength: 100
+      pattern: "^[\\p{L}\\p{M}0-9 .'-]+$"
+
+    BaseResponse:
+      type: object
+      required: [success, message, responseCode]
+      properties:
+        success: { type: boolean, nullable: false }
+        message: { type: string, nullable: false }
+        responseCode:
+          type: integer
+          format: int32
+          nullable: false
+          description: Always equal to the HTTP status code.
+
+    PersonAstronaut:
+      type: object
+      required: [personId, name, currentRank, currentDutyTitle, careerStartDate, careerEndDate]
+      properties:
+        personId: { type: integer, format: int32, nullable: false }
+        name: { type: string, nullable: false }
+        currentRank:
+          type: string
+          nullable: false
+          description: Empty string "" when the person has no astronaut assignment (never null).
+        currentDutyTitle:
+          type: string
+          nullable: false
+          description: Empty string "" when the person has no astronaut assignment (never null).
+        careerStartDate:
+          type: string
+          nullable: true
+          description: Local date-time without offset, e.g. "2019-09-02T00:00:00"; null when no assignment.
+        careerEndDate:
+          type: string
+          nullable: true
+          description: Same format; null unless retired.
+
+    GetPeopleResult:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          required: [people]
+          properties:
+            people:
+              type: array
+              nullable: false
+              items: { $ref: "#/components/schemas/PersonAstronaut" }
+
+    GetPersonByNameResult:
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          required: [person]
+          properties:
+            person:
+              allOf: [{ $ref: "#/components/schemas/PersonAstronaut" }]
+              nullable: true
+              description: Non-null on 200; null on 404.
+
+    ValidationProblemDetails:
+      type: object
+      required: [type, title, status, errors, traceId]
+      properties:
+        type: { type: string, nullable: false }
+        title: { type: string, nullable: false }
+        status: { type: integer, format: int32, nullable: false, enum: [400] }
+        errors:
+          type: object
+          nullable: false
+          additionalProperties:
+            type: array
+            items: { type: string }
+        traceId: { type: string, nullable: false }

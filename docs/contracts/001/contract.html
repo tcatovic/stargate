@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract 001: Filter people by name, rank and duty title</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.5rem; margin:.4rem 0; } h2 { font-size:1.15rem; margin:1.8rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 001 &middot; contract revision 1 (initial) &middot; status: awaiting approval together with <a href="../../plans/001-search-people-by-name-rank-duty-title.html">the plan</a></p>
+<h1>Contract 001: Filter people by name, rank and duty title</h1>
+<p>This is what api-dev and ui-dev build against, in parallel. It has no schema change and no migration.</p>
+
+<h2>Endpoints</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Request</th><th>Status and body</th></tr></thead>
+<tbody>
+<tr><td><code>GET /Person</code><br><code>?name=</code> (case-insensitive contains)<br><code>&amp;rank=</code> (case-insensitive exact)<br><code>&amp;dutyTitle=</code> (case-insensitive exact)</td>
+<td>
+<p><strong>200</strong> <code>{success, message, responseCode, people[]}</code>. This shape is unchanged. The list may be empty and its order is unspecified.</p>
+<p><strong>400</strong> <code>ValidationProblemDetails</code>.</p>
+<p><strong>500</strong> with an empty body.</p>
+<p>Filters combine with AND. An empty value means no filter. Rank and dutyTitle filters never match unassigned people.</p>
+</td></tr>
+<tr><td><code>GET /Person/{name}</code><br>URL-encoded, trimmed, exact match ignoring case</td>
+<td>
+<p><strong>200</strong> <code>{..., person}</code>, where <code>person</code> is non-null.</p>
+<p><strong>404</strong> <code>{success: false, message: "Person not found", responseCode: 404, person: null}</code>.</p>
+<p><strong>400</strong> <code>ValidationProblemDetails</code>.</p>
+<p><strong>500</strong> with an empty body.</p>
+</td></tr>
+</tbody>
+</table></div>
+<p><strong>Validation for all four inputs:</strong> at most 100 characters, using letters, digits, space, hyphen, apostrophe and period only (<code>^[\p{L}\p{M}0-9 .'-]+$</code>). The path value must also be non-blank. The 400 body is the framework's <code>{type, title, status: 400, errors: {name|rank|dutyTitle: [...]}, traceId}</code> and never echoes the input.</p>
+<p><strong>Person fields:</strong> <code>personId</code>, <code>name</code>, <code>currentRank</code>, <code>currentDutyTitle</code>, <code>careerStartDate</code>, <code>careerEndDate</code>. These are unchanged. Unassigned people have <code>""</code> for rank and title (not null) and null dates.</p>
+<p><strong>Case-insensitivity:</strong> ASCII letters only (SQLite). <code>élena</code> does not find <code>Élena</code>.</p>
+
+<h2>Breaking changes</h2>
+<div class="card bad">
+<ul>
+<li><span class="tag bad">breaking</span> <code>GET /Person/{name}</code>: an unknown name returns <strong>404</strong>. It used to return 200 with <code>person: null</code>. This was agreed in the task.</li>
+<li><span class="tag bad">breaking</span> <code>GET /Person/{name}</code>: the match is now case-insensitive and ignores surrounding whitespace. Invalid input returns 400.</li>
+<li><span class="tag bad">breaking</span> <code>GET /Person</code>: invalid <code>name</code>, <code>rank</code> or <code>dutyTitle</code> returns 400. These parameters used to be ignored.</li>
+<li><span class="tag bad">breaking</span> On both endpoints, a 500 has an empty body instead of a <code>BaseResponse</code> carrying the exception message.</li>
+<li><span class="tag bad">side effect</span> <code>GET /AstronautDuty/{name}</code> (out of scope) shares the lookup, so an unknown name there also returns 404 and the match is case-insensitive.</li>
+<li><span class="tag warn">UI internal</span> <code>StargateApi.getPerson(name)</code> now returns <code>Observable&lt;PersonAstronaut | null&gt;</code>, and a 404 emits <code>null</code>. It has no callers.</li>
+</ul>
+</div>
+
+<h2>UI client</h2>
+<pre><code>listPeople(filters?: PersonFilters): Observable&lt;GetPeopleResult&gt;   // new; omit empty values, trim, HttpParams
+getPeople(): Observable&lt;GetPeopleResult&gt;                            // unchanged, = listPeople()
+getPerson(name: string): Observable&lt;PersonAstronaut | null&gt;         // 404 =&gt; null; blank =&gt; null, no request
+interface PersonFilters { name?: string; rank?: string; dutyTitle?: string }
+interface ValidationProblemDetails { type: string; title: string; status: number; errors: Record&lt;string, string[]&gt;; traceId: string }</code></pre>
+
+<h2>Open points needing your answer</h2>
+<div class="card warn">
+<ol>
+<li><strong>Q1.</strong> Over HTTP, <code>x' OR '1'='1</code> returns <strong>400</strong> (the <code>=</code> is not allowed), not 404 or an empty list. Handler tests prove 404 and the empty list with that exact string. I recommend accepting this.</li>
+<li><strong>Q2.</strong> Add the test-only package <code>Microsoft.AspNetCore.Mvc.Testing</code> for HTTP-level tests. I recommend yes. If not, QA covers those cases by hand.</li>
+<li><strong>Q3.</strong> Accept ASCII-only case-insensitivity. I recommend yes.</li>
+</ol>
+</div>
+
+<h2>Files</h2>
+<ul>
+<li><a href="openapi.yaml">openapi.yaml</a>: endpoints, parameters, status codes, schemas</li>
+<li><a href="types.ts">types.ts</a>: exact UI types and <code>StargateApi</code> signatures</li>
+<li><a href="data.md">data.md</a>: SQL, validation rule, domain-rule enforcement (no schema change)</li>
+<li><a href="tests.md">tests.md</a>: Given/When/Then for api (P, N, R, C, S, H), ui (U) and QA</li>
+</ul>
+</main>
+</body>
+</html>

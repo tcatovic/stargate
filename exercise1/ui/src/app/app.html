@@ -1,0 +1,45 @@
+<header>
+  <h1>Stargate ACTS</h1>
+  <p>Astronaut Career Tracking System</p>
+</header>
+
+<main>
+  @switch (state()) {
+    @case ('loading') {
+      <p role="status">Loading people…</p>
+    }
+    @case ('error') {
+      <p role="alert">Could not reach the API.</p>
+      <button type="button" (click)="load()">Retry</button>
+    }
+    @case ('ready') {
+      @if (people().length === 0) {
+        <p>No people found.</p>
+      } @else {
+        <table>
+          <caption class="visually-hidden">People and their current astronaut duty</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Rank</th>
+              <th scope="col">Duty</th>
+              <th scope="col">Career start</th>
+              <th scope="col">Career end</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (person of people(); track person.personId) {
+              <tr>
+                <th scope="row">{{ person.name }}</th>
+                <td>{{ person.currentRank || '—' }}</td>
+                <td>{{ person.currentDutyTitle || '—' }}</td>
+                <td>{{ person.careerStartDate ? (person.careerStartDate | date: 'mediumDate') : '—' }}</td>
+                <td>{{ person.careerEndDate ? (person.careerEndDate | date: 'mediumDate') : '—' }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    }
+  }
+</main>

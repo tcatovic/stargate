@@ -1,0 +1,25 @@
+# .NET
+bin/
+obj/
+*.user
+*.db
+*.db-shm
+*.db-wal
+TestResults/
+coverage*/
+
+# Angular / Node
+node_modules/
+exercise1/ui/dist/
+exercise1/ui/.angular/
+npm-debug.log*
+
+# Editors / OS
+.vs/
+.idea/
+.vscode/*
+!.vscode/extensions.json
+.DS_Store
+
+# Local Claude state
+.claude/settings.local.json

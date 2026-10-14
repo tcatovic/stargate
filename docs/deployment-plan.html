@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stargate Deployment Plan</title>
+<style>
+  :root {
+    --bg: #fafaf8;
+    --surface: #ffffff;
+    --text: #1d2125;
+    --muted: #5b6570;
+    --border: #d9dde2;
+    --accent: #1f5fbf;
+    --accent-soft: #e6eefb;
+    --warn: #8a5a00;
+    --warn-soft: #fff3d6;
+    --code-bg: #eef0f3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171a;
+      --surface: #1c2024;
+      --text: #e6e8ea;
+      --muted: #9aa4ae;
+      --border: #333a41;
+      --accent: #6ea8ff;
+      --accent-soft: #1d2a40;
+      --warn: #f0c060;
+      --warn-soft: #3a2f14;
+      --code-bg: #262b30;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14171a;
+    --surface: #1c2024;
+    --text: #e6e8ea;
+    --muted: #9aa4ae;
+    --border: #333a41;
+    --accent: #6ea8ff;
+    --accent-soft: #1d2a40;
+    --warn: #f0c060;
+    --warn-soft: #3a2f14;
+    --code-bg: #262b30;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 56rem; margin: 0 auto; padding: 2rem 16px 4rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 .25rem; line-height: 1.2; }
+  h2 { font-size: 1.3rem; margin: 2.5rem 0 .75rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  h3 { font-size: 1.05rem; margin: 1.5rem 0 .5rem; }
+  p, ul, ol { margin: .5rem 0 1rem; }
+  li { margin: .25rem 0; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; }
+  code { background: var(--code-bg); padding: .1rem .35rem; border-radius: 4px; font-size: .9em; }
+  pre {
+    background: var(--code-bg); padding: 1rem; border-radius: 8px;
+    overflow-x: auto; font-size: .85rem; line-height: 1.5; margin: .75rem 0 1.25rem;
+  }
+  pre code { background: none; padding: 0; }
+  .callout {
+    background: var(--accent-soft); border-left: 4px solid var(--accent);
+    padding: .75rem 1rem; border-radius: 0 8px 8px 0; margin: 1rem 0;
+  }
+  .callout.warn { background: var(--warn-soft); border-left-color: var(--warn); }
+  .callout > :first-child { margin-top: 0; }
+  .callout > :last-child { margin-bottom: 0; }
+  .table-wrap { overflow-x: auto; margin: .75rem 0 1.25rem; }
+  table { border-collapse: collapse; width: 100%; font-size: .95rem; }
+  th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .phase {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: .25rem 1rem .5rem; margin: 1rem 0;
+  }
+  .phase h3 { margin-top: .75rem; }
+  .tag {
+    display: inline-block; font-size: .75rem; font-weight: 600; padding: .05rem .5rem;
+    border-radius: 999px; background: var(--accent-soft); color: var(--accent); vertical-align: middle;
+  }
+  .tag.you { background: var(--warn-soft); color: var(--warn); }
+  @media (max-width: 480px) { h1 { font-size: 1.6rem; } }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Stargate ACTS: Deployment Plan</h1>
+<p class="sub">GitHub, Docker Compose locally, Azure Container Apps and Azure SQL in production. Status: planning only, nothing built yet.</p>
+
+<div class="callout">
+  <p><strong>Goal.</strong> Push the monorepo to GitHub, run the whole system locally with one <code>docker compose up</code>, and deploy it to Azure as a public test project that anyone can browse.</p>
+</div>
+
+<h2>Decisions made</h2>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Topic</th><th>Decision</th></tr></thead>
+  <tbody>
+    <tr><td>Hosting</td><td>Azure Container Apps for both <code>api</code> and <code>web</code> (scale to zero)</td></tr>
+    <tr><td>Database</td><td>Azure SQL Database, free offer. Local dev uses SQL Server in Docker</td></tr>
+    <tr><td>Public access</td><td>Read-only for anonymous visitors. Write endpoints require an API key</td></tr>
+    <tr><td>Images</td><td>GitHub Container Registry (GHCR), free</td></tr>
+    <tr><td>Azure login from CI</td><td>OIDC federated credential, no stored Azure secrets</td></tr>
+    <tr><td>Infrastructure</td><td>Bicep in <code>infra/</code></td></tr>
+    <tr><td>Local run</td><td>One <code>docker-compose.yml</code>: db, api, web</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Architecture</h2>
+<h3>Local</h3>
+<pre><code>docker compose up
+  db    SQL Server 2022   (named volume, health check)
+  api   .NET 10 API       (waits for db, applies migrations, seeds dev data)
+  web   nginx             (serves the Angular build, proxies /api to api)
+
+browser -> http://localhost:8080 -> web -> /api -> api -> db</code></pre>
+
+<h3>Production</h3>
+<pre><code>GitHub (main)
+  |  Actions: build, test, push images to GHCR, deploy via OIDC
+  v
+Azure resource group
+  Container Apps environment
+    web  (public ingress, nginx, proxies /api to api)
+    api  (internal ingress only, reached through web)
+  Azure SQL Database (free offer)
+  Log Analytics workspace (Container Apps logs)</code></pre>
+
+<p>The <code>api</code> app has internal ingress only. Browsers reach it through the <code>web</code> app's <code>/api</code> proxy, so there is one public origin and no CORS configuration. Swagger stays off in production.</p>
+
+<h2>Constraints and risks</h2>
+<div class="callout warn">
+  <p><strong>Blockers before anything is public.</strong></p>
+  <ul>
+    <li><strong>SQL injection.</strong> Several handlers build SQL from request values. Fix and test before any public deployment.</li>
+    <li><strong>Provider switch.</strong> Production uses SQL Server, so the EF provider changes from SQLite and the initial migration is regenerated. Existing migration files are not edited; the old one is replaced as part of the switch because there is no production data yet.</li>
+  </ul>
+</div>
+<ul>
+  <li><strong>Free Azure SQL limit.</strong> The free offer has a monthly compute allowance. Configure it to <em>auto-pause until next month</em> rather than bill, so the demo can go offline late in the month but never costs money. The UI must show a clear "database unavailable" state.</li>
+  <li><strong>Cold starts.</strong> Both apps scale to zero, so the first request after idle takes a few seconds and the database may need to wake. The smoke test must tolerate this with retries.</li>
+  <li><strong>Cost guard.</strong> Create an Azure budget alert at a low amount before provisioning anything.</li>
+  <li><strong>Read-only public.</strong> Anonymous requests may only use GET endpoints. POST endpoints require the <code>X-Api-Key</code> header, checked in middleware and compared in constant time. The key lives in Container Apps secrets, never in the repo or the UI bundle.</li>
+  <li><strong>Sandbox limits.</strong> This sandbox blocks the .NET and NuGet download hosts, and Azure logins need your machine. Steps marked <span class="tag you">you</span> are run by you; I supply the exact commands.</li>
+</ul>
+
+<h2>Phases</h2>
+
+<div class="phase">
+  <h3>Phase 1: Foundation <span class="tag">code</span> <span class="tag you">you</span></h3>
+  <ul>
+    <li>Allow the .NET hosts in the sandbox, then verify <code>dotnet build -warnaserror</code> on .NET 10 and fix any package breaks.</li>
+    <li>Create the GitHub repo, set the git user, make the baseline commit, push.</li>
+    <li>Add <code>.github/workflows/ci.yml</code>: API build and test, format check, UI <code>npm ci</code>, test and build, CodeQL, Dependabot for NuGet, npm and Actions.</li>
+    <li>Branch protection on <code>main</code>: CI must pass, pull requests required.</li>
+  </ul>
+  <p><strong>Done when:</strong> a pull request runs CI green on GitHub.</p>
+</div>
+
+<div class="phase">
+  <h3>Phase 2: Harden the API <span class="tag">code</span></h3>
+  <ul>
+    <li>Remove interpolated SQL (EF LINQ or parameterised Dapper), with hostile-input tests.</li>
+    <li>Fix the duties endpoint calling the wrong query, and the null dereferences.</li>
+    <li>Validation pipeline returning 400, 404 and 409 with ProblemDetails; global exception handler.</li>
+    <li>Duty rules 3-7 in one transaction, with unit tests.</li>
+    <li>API-key middleware on write endpoints; anonymous GET allowed; rate limiting on all routes.</li>
+    <li><code>/health</code> (liveness) and <code>/health/ready</code> (database).</li>
+    <li>Create <code>exercise1/api.Tests</code> and a root <code>.sln</code>.</li>
+  </ul>
+  <p><strong>Done when:</strong> hostile input is rejected, a write without a key returns 401, and coverage is above the CI gate.</p>
+</div>
+
+<div class="phase">
+  <h3>Phase 3: Containers and SQL Server <span class="tag">code</span></h3>
+  <ul>
+    <li>Switch to <code>Microsoft.EntityFrameworkCore.SqlServer</code>; regenerate the initial migration; add a unique index on <code>Person.Name</code>.</li>
+    <li>Dev-only seeder with sample people and duties. Replaces the commented <code>SeedData</code>.</li>
+    <li><code>exercise1/api/Dockerfile</code>: multi-stage, non-root, health check.</li>
+    <li><code>exercise1/ui/Dockerfile</code> and <code>nginx.conf</code>: Angular build, then nginx with SPA fallback and the <code>/api</code> proxy.</li>
+    <li>Root <code>docker-compose.yml</code> and <code>.dockerignore</code> files.</li>
+    <li>Migrations are applied by a one-shot step, not by app start-up in production.</li>
+  </ul>
+  <p><strong>Done when:</strong> <code>docker compose up</code> from a clean clone shows seeded people at <code>http://localhost:8080</code>.</p>
+</div>
+
+<div class="phase">
+  <h3>Phase 4: Azure and deployment <span class="tag">code</span> <span class="tag you">you</span></h3>
+  <ul>
+    <li><span class="tag you">you</span> Create the budget alert, the resource group, and the GitHub OIDC app registration (commands provided).</li>
+    <li>Bicep: SQL server and free-offer database, Log Analytics, Container Apps environment, <code>api</code> (internal) and <code>web</code> (external) apps, secrets for the connection string and API key.</li>
+    <li><code>.github/workflows/deploy.yml</code> on merge to <code>main</code>:
+      <ol>
+        <li>build and test</li>
+        <li>build and push <code>api</code> and <code>web</code> images to GHCR, tagged with the commit SHA</li>
+        <li>build an EF migration bundle and apply it to Azure SQL</li>
+        <li>update the two Container Apps to the new image tags</li>
+        <li>smoke test <code>/health/ready</code> and <code>GET /Person</code> through the public URL, with retries for cold starts</li>
+      </ol>
+    </li>
+    <li>GitHub <code>production</code> environment with a manual approval gate.</li>
+    <li>Separate manually-triggered <code>infra.yml</code> to apply Bicep.</li>
+  </ul>
+  <p><strong>Done when:</strong> merging to <code>main</code> and approving the gate deploys a working site.</p>
+</div>
+
+<div class="phase">
+  <h3>Phase 5: Go live <span class="tag">code</span> <span class="tag you">you</span></h3>
+  <ul>
+    <li>Deploy to the generated Container Apps URL and run the smoke tests.</li>
+    <li>UI shows a clear message when the free database is paused or unreachable.</li>
+    <li>Repo <code>README.md</code> with the live link, run, test and deploy instructions, and the architecture sketch.</li>
+    <li>Optional later: custom domain, a nightly job that re-seeds demo data, and a minimum of one web replica to avoid cold starts.</li>
+  </ul>
+</div>
+
+<h2>Repository layout after this plan</h2>
+<pre><code>.
+|-- .github/workflows/      ci.yml, deploy.yml, infra.yml
+|-- infra/                  Bicep (main.bicep, modules/)
+|-- docs/                   HTML docs (this file)
+|-- exercise1/
+|   |-- api/                .NET 10 API + Dockerfile
+|   |-- api.Tests/          xUnit unit and integration tests
+|   `-- ui/                 Angular 21 + Dockerfile + nginx.conf
+|-- docker-compose.yml
+|-- Stargate.sln
+|-- global.json
+`-- CLAUDE.md</code></pre>
+
+<h2>Open items</h2>
+<ul>
+  <li><strong>GitHub:</strong> repository name, and whether it is public.</li>
+  <li><strong>Azure:</strong> subscription and region. Pick a region that offers the free SQL database.</li>
+  <li><strong>Folder name:</strong> keep <code>exercise1/</code>, or rename to <code>apps/api</code> and <code>apps/web</code> before the first push. Renaming is cheapest now.</li>
+  <li><strong>Container Apps minimum replicas:</strong> start at zero for cost; revisit if cold starts are annoying.</li>
+</ul>
+
+</main>
+</body>
+</html>

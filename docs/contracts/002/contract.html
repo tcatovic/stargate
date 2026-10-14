@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract 002: Rename a person and enforce unique names</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.5rem; margin:.4rem 0; } h2 { font-size:1.15rem; margin:1.8rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 002 &middot; contract revision 1 (initial) &middot; status: awaiting approval together with <a href="../../plans/002-update-person.html">the plan</a></p>
+<h1>Contract 002: Rename a person and enforce unique names</h1>
+<p>api-dev and ui-dev build against this contract in parallel. The machine files are <a href="openapi.yaml">openapi.yaml</a>, <a href="data.md">data.md</a>, <a href="types.ts">types.ts</a> and <a href="tests.md">tests.md</a>.</p>
+
+<h2>Changes you are approving</h2>
+<div class="card warn"><p><span class="tag warn">alters data</span> <strong>Migration trims existing names</strong> (spaces, tab, CR, LF at either end). It runs only after a guard has proven that trimming creates no collision. If any names are equal ignoring ASCII case and surrounding whitespace, the migration aborts with a clear message and changes nothing. See plan Q1.</p></div>
+<div class="card warn"><p><span class="tag warn">behaviour change</span> <strong><code>POST /Person</code> (code not edited):</strong> a duplicate that differs only in case, or is identical, is now rejected by the database. The existing controller catch returns <strong>500</strong> <code>{success:false, message:"An error occurred while saving the entity changes. See the inner exception for details.", responseCode:500}</code>. It used to be 200 and created a duplicate. Padded names (<code>"Ada "</code>) still insert. Task 006 fixes both. See plan Q2.</p></div>
+<div class="card"><p><span class="tag ok">non-breaking for ASCII</span> <strong>Shared name rule tightened</strong> (also applies to <code>GET /Person</code> filters and <code>GET /Person/{name}</code>). These now return 400:</p>
+<ul>
+<li>invisible letters and marks (U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B-U+180F, U+3164, U+FE00-U+FE0F, U+FFA0)</li>
+<li>a combining mark that does not follow a letter</li>
+<li>more than 3 marks in a row</li>
+</ul>
+<p>Reads now NFC-normalise their input, so an NFD query finds an NFC name. The 400 shape and message are unchanged.</p></div>
+<p>There are no breaking changes to existing response shapes.</p>
+
+<h2>New endpoint: <code>PUT /Person/{personId}</code></h2>
+<p>The body is <code>{ "name": "..." }</code>. The JSON content type is required.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Status</th><th>When</th><th>Body</th></tr></thead>
+<tbody>
+<tr><td><strong>200</strong></td><td>Renamed, or already had that exact name. Idempotent.</td><td><code>{success:true, message:"Successful", responseCode:200, person:{personId, name, currentRank, currentDutyTitle, careerStartDate, careerEndDate}}</code>. The person shape is unchanged from <code>GET /Person</code>.</td></tr>
+<tr><td><strong>400</strong></td><td>Invalid name, missing or malformed body, or <code>personId</code> not an integer or below 1.</td><td><code>ValidationProblemDetails</code>, the same as task 001. It never echoes input.</td></tr>
+<tr><td><strong>404</strong></td><td>Unknown id.</td><td><code>{success:false, message:"Person not found", responseCode:404, person:null}</code></td></tr>
+<tr><td><strong>409</strong></td><td>Another person has the name, ignoring ASCII case and surrounding whitespace, after NFC. This applies to both the pre-check and the database index (race).</td><td><code>{success:false, message:"A person with this name already exists", responseCode:409, person:null}</code></td></tr>
+<tr><td><strong>415</strong></td><td>Not JSON.</td><td><code>ProblemDetails</code></td></tr>
+<tr><td><strong>500</strong></td><td>Real fault.</td><td>Empty in Production.</td></tr>
+</tbody>
+</table></div>
+<p><strong>The name rule</strong> (defined once, reused by task 006): NFC-normalise and trim the name, then require 1 to 100 characters, made of letters (each followed by at most 3 combining marks), ASCII digits, space, period, apostrophe and hyphen, with no invisible code points. The name is stored in that normalised form.</p>
+<p><strong>Rename to own name or a different casing of it</strong> succeeds. Rank, duty title and duties are never touched. There is no <code>Location</code> header.</p>
+
+<h2>Database</h2>
+<ul>
+<li><code>Person.Name</code> becomes <code>TEXT COLLATE NOCASE NOT NULL</code>, with unique index <code>IX_Person_Name</code>, added by the new migration <code>AddUniquePersonNameIndex</code>. Existing migrations are untouched.</li>
+<li>Case folding is ASCII-only (SQLite), so <code>Émile</code> and <code>émile</code> are distinct. This is the accepted decision from task 001.</li>
+<li>Stored names written before this task are not NFC-normalised.</li>
+<li>Down drops the index and the collation. Trimmed names stay trimmed.</li>
+</ul>
+
+<h2>UI client</h2>
+<p><code>StargateApi.updatePerson(personId: number, name: string): Observable&lt;UpdatePersonOutcome&gt;</code></p>
+<ul>
+<li>It sends <code>PUT /api/Person/{personId}</code> with body <code>{name}</code>.</li>
+<li>It emits <code>{status:'updated', person}</code>, <code>{status:'notFound'}</code> (404), <code>{status:'conflict'}</code> (409) or <code>{status:'invalid', errors}</code> (400).</li>
+<li>Other errors propagate.</li>
+</ul>
+<p>The new types in <code>models.ts</code> are <code>UpdatePersonRequest</code>, <code>UpdatePersonResult</code> and <code>UpdatePersonOutcome</code>. There is no screen.</p>
+
+<h2>Not decided by this contract</h2>
+<ul>
+<li>The exact <code>errors</code> keys for body-shape failures. They are framework-defined, and clients must not depend on them. Name-rule failures use <code>Name</code> (compare case-insensitively). This is unverified and is checked by the first HTTP test.</li>
+</ul>
+</main>
+</body>
+</html>

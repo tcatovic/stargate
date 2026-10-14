@@ -2,6 +2,7 @@ using Dapper;
 using MediatR;
 using StargateAPI.Business.Data;
 using StargateAPI.Business.Dtos;
+using StargateAPI.Business.Validation;
 using StargateAPI.Controllers;
 using System.Net;
 
@@ -34,7 +35,7 @@ namespace StargateAPI.Business.Queries
         public async Task<GetPersonByNameResult> Handle(GetPersonByName request, CancellationToken cancellationToken)
         {
             var people = await _context.Connection.QueryAsync<PersonAstronaut>(
-                new CommandDefinition(Sql, new { Name = request.Name.Trim() }, cancellationToken: cancellationToken));
+                new CommandDefinition(Sql, new { Name = InputRules.Normalize(request.Name) }, cancellationToken: cancellationToken));
 
             var person = people.FirstOrDefault();
             if (person is null)

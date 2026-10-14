@@ -94,15 +94,14 @@ public class GetPersonByNameQueryTests
     }
 
     [Fact]
-    public async Task N8_CaseDuplicates_ResolveToExactCaseThenLowestId()
+    public async Task N8_CaseDuplicatesCannotExist_SoTheLookupIsUnambiguous()
     {
-        using var db = PeopleFixture.Create(new Person { Name = "MIRA OKAFOR" });
+        // Task 002: the unique NOCASE index replaced the old "exact case wins, then lowest Id" tie-break.
+        using var db = PeopleFixture.Create();
+        Assert.Throws<Microsoft.Data.Sqlite.SqliteException>(() => db.Execute("INSERT INTO Person (Name) VALUES ('MIRA OKAFOR')"));
         var mira = db.Scalar<long>("SELECT Id FROM Person WHERE Name = 'Mira Okafor'");
-        var upper = db.Scalar<long>("SELECT Id FROM Person WHERE Name = 'MIRA OKAFOR'");
-        Assert.True(upper > mira);
 
-        Assert.Equal((int)upper, (await Run(db, "MIRA OKAFOR")).Person?.PersonId);
-        Assert.Equal((int)mira, (await Run(db, "Mira Okafor")).Person?.PersonId);
+        Assert.Equal((int)mira, (await Run(db, "MIRA OKAFOR")).Person?.PersonId);
         Assert.Equal((int)mira, (await Run(db, "mira okafor")).Person?.PersonId);
     }
 

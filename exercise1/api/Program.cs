@@ -6,7 +6,17 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    // Binding errors on route/query values must not echo the submitted text.
+    var messages = options.ModelBindingMessageProvider;
+    messages.SetAttemptedValueIsInvalidAccessor((_, _) => "The value is not valid.");
+    messages.SetValueIsInvalidAccessor(_ => "The value is not valid.");
+    messages.SetValueMustBeANumberAccessor(_ => "The value must be a number.");
+    // Parameters (a route value such as personId) use the "non-property" variants, which are the ones that echo.
+    messages.SetNonPropertyAttemptedValueIsInvalidAccessor(_ => "The value is not valid.");
+    messages.SetNonPropertyValueMustBeANumberAccessor(() => "The value must be a number.");
+});
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();

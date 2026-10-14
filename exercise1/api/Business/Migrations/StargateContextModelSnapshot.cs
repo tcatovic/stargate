@@ -15,7 +15,7 @@ namespace StargateAPI.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "7.0.15");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.13");
 
             modelBuilder.Entity("StargateAPI.Business.Data.AstronautDetail", b =>
                 {
@@ -26,7 +26,7 @@ namespace StargateAPI.Migrations
                     b.Property<DateTime?>("CareerEndDate")
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTime?>("CareerStartDate")
+                    b.Property<DateTime>("CareerStartDate")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CurrentDutyTitle")

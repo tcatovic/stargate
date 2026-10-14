@@ -8,6 +8,9 @@ import {
   GetPersonByNameResult,
   PersonAstronaut,
   PersonFilters,
+  UpdatePersonOutcome,
+  UpdatePersonRequest,
+  UpdatePersonResult,
 } from './models';
 
 const FILTER_KEYS = ['name', 'rank', 'dutyTitle'] as const;
@@ -44,7 +47,9 @@ export class StargateApi {
       .pipe(
         map((result) => result.person),
         catchError((error: unknown) =>
-          error instanceof HttpErrorResponse && error.status === 404 ? of(null) : throwError(() => error),
+          error instanceof HttpErrorResponse && error.status === 404
+            ? of(null)
+            : throwError(() => error),
         ),
       );
   }
@@ -54,4 +59,51 @@ export class StargateApi {
       `${this.baseUrl}/AstronautDuty/${encodeURIComponent(name)}`,
     );
   }
+
+  /**
+   * Renames a person. The name is sent unmodified (the server trims and normalises). 404, 409 and 400 are emitted as
+   * outcomes; a 200 without a person errors; every other failure propagates as the HttpErrorResponse.
+   */
+  updatePerson(personId: number, name: string): Observable<UpdatePersonOutcome> {
+    const body: UpdatePersonRequest = { name };
+    return this.http
+      .put<UpdatePersonResult>(
+        `${this.baseUrl}/Person/${encodeURIComponent(String(personId))}`,
+        body,
+      )
+      .pipe(
+        map((result): UpdatePersonOutcome => {
+          if (!result.person) {
+            throw new Error('Malformed update response');
+          }
+          return { status: 'updated', person: result.person };
+        }),
+        catchError((error: unknown) => {
+          if (error instanceof HttpErrorResponse) {
+            switch (error.status) {
+              case 404:
+                return of<UpdatePersonOutcome>({ status: 'notFound' });
+              case 409:
+                return of<UpdatePersonOutcome>({ status: 'conflict' });
+              case 400:
+                return of<UpdatePersonOutcome>({
+                  status: 'invalid',
+                  errors: extractErrors(error.error),
+                });
+            }
+          }
+          return throwError(() => error);
+        }),
+      );
+  }
+}
+
+function extractErrors(body: unknown): Record<string, string[]> {
+  if (typeof body === 'object' && body !== null && 'errors' in body) {
+    const errors = (body as { errors: unknown }).errors;
+    if (typeof errors === 'object' && errors !== null) {
+      return errors as Record<string, string[]>;
+    }
+  }
+  return {};
 }

@@ -45,3 +45,6 @@ app.MapControllers();
 app.Run();
 
 
+
+// Makes the top-level-statements entry point visible to WebApplicationFactory<Program> in api.Tests.
+public partial class Program;

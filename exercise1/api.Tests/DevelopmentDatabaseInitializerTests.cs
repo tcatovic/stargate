@@ -32,8 +32,8 @@ public class DevelopmentDatabaseInitializerTests
 
         Assert.True(result.Ran);
         Assert.True(result.Seeded);
-        Assert.Equal(new[] { TestDatabase.InitialCreate, TestDatabase.LatestMigration }, result.AppliedMigrations);
-        Assert.Equal(new[] { TestDatabase.InitialCreate, TestDatabase.LatestMigration }, db.AppliedMigrations());
+        Assert.Equal(TestDatabase.AllMigrations, result.AppliedMigrations);
+        Assert.Equal(TestDatabase.AllMigrations, db.AppliedMigrations());
         Assert.Equal(6, Count(db, "Person"));
         Assert.Equal(4, Count(db, "AstronautDetail"));
         Assert.Equal(8, Count(db, "AstronautDuty"));
@@ -48,7 +48,7 @@ public class DevelopmentDatabaseInitializerTests
         var result = await db.CreateInitializer(Development).InitializeAsync();
 
         Assert.True(result.Seeded);
-        Assert.Equal(2, result.AppliedMigrations.Count);
+        Assert.Equal(TestDatabase.AllMigrations.Count, result.AppliedMigrations.Count);
         Assert.Equal(6, Count(db, "Person"));
     }
 
@@ -61,7 +61,7 @@ public class DevelopmentDatabaseInitializerTests
 
         var result = await db.CreateInitializer(Development).InitializeAsync();
 
-        Assert.Equal(new[] { TestDatabase.LatestMigration }, result.AppliedMigrations);
+        Assert.Equal(TestDatabase.AllMigrations.Skip(1), result.AppliedMigrations);
         Assert.True(db.CareerStartDateIsNotNull());
         Assert.True(result.Seeded);
         Assert.Equal(6, Count(db, "Person"));
@@ -353,7 +353,7 @@ public class DevelopmentDatabaseInitializerTests
         await db.CreateInitializer(Development, second).InitializeAsync();
         await db.CreateInitializer("Production", other).InitializeAsync();
 
-        Assert.Contains(first.Entries, e => e.Level == LogLevel.Information && e.Message.Contains("Applied 2 migration"));
+        Assert.Contains(first.Entries, e => e.Level == LogLevel.Information && e.Message.Contains($"Applied {TestDatabase.AllMigrations.Count} migration"));
         Assert.Contains(first.Entries, e => e.Level == LogLevel.Information && e.Message.Contains("Seeded 6 people, 4 astronaut details and 8 duties"));
         Assert.Contains(second.Entries, e => e.Message.Contains("no migrations applied"));
         Assert.Contains(second.Entries, e => e.Message.Contains("Seeding skipped"));

@@ -1,0 +1,10 @@
+<Project>
+  <!-- Every .NET project under exercise1/ fails the build on any warning (CLAUDE.md: warnings as errors). -->
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- NuGet audit results come from an external feed that changes without a commit (NU1900 = feed unreachable,
+         NU1901-NU1904 = low..critical advisory). They are still reported as warnings, but must not break every
+         branch the day an advisory is published or the feed is offline. Gate them in CI instead. -->
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1900;NU1901;NU1902;NU1903;NU1904</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>

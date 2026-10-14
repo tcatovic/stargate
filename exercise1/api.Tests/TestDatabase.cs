@@ -2,6 +2,8 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using StargateAPI.Business.Data;
 
 namespace StargateAPI.Tests;
@@ -78,6 +80,32 @@ public sealed class TestDatabase : IDisposable
 
     public List<string> AppliedMigrations() =>
         Strings("SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\" ORDER BY \"MigrationId\"");
+
+    public DevelopmentDatabaseInitializer CreateInitializer(string environmentName, ILogger<DevelopmentDatabaseInitializer>? logger = null) =>
+        new(CreateContext(), new FakeHostEnvironment(environmentName), logger ?? NullLogger<DevelopmentDatabaseInitializer>.Instance);
+
+    /// <summary>Every row of the three data tables, ordered by Id, as one string. Equal dumps mean identical data.</summary>
+    public string Dump()
+    {
+        using var connection = Open();
+        var text = new System.Text.StringBuilder();
+        foreach (var table in new[] { "Person", "AstronautDetail", "AstronautDuty" })
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT * FROM \"{table}\" ORDER BY \"Id\"";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                text.Append(table);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    text.Append('|').Append(reader.IsDBNull(i) ? "<null>" : Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture));
+                }
+                text.Append('\n');
+            }
+        }
+        return text.ToString();
+    }
 
     public bool CareerStartDateIsNotNull() =>
         Scalar<long>("SELECT \"notnull\" FROM pragma_table_info('AstronautDetail') WHERE name = 'CareerStartDate'") == 1;

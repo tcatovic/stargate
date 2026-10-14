@@ -1,7 +1,7 @@
 ---
 id: 004
 title: Apply migrations and seed development data on startup in Development
-status: planned
+status: approved
 platforms: [api, db]
 ---
 
@@ -17,6 +17,7 @@ Running the API in the Development environment against an empty or out-of-date d
 - Seed data is inserted **directly** (not through `CreateAstronautDutyHandler`, which has known bugs and is about to change), with fixed dates computed to satisfy the rules.
 - Seed contents: about six fictional people (not John Doe and Jane Doe) covering every case below.
 - The commented-out `SeedData` in `StargateContext` is removed.
+- **Plan review answers:** the seed names, ranks (2LT, CPT, MAJ, LTC) and titles are exactly as listed in the plan. **No new test packages**: the initializer class is tested directly, QA checks the `Program.cs` wiring, and `Microsoft.AspNetCore.Mvc.Testing` waits for the integration-test task. **No setting to disable** automatic migration/seeding in Development (`dotnet run --no-launch-profile` already skips it).
 
 ## Acceptance criteria
 - [ ] In the Development environment, starting the API against a missing, empty or out-of-date `starbase.db` applies all pending migrations and then seeds, with no manual step.

@@ -1,7 +1,7 @@
 ---
 id: 002
 title: Add an endpoint to rename a person
-status: approved
+status: in-progress
 platforms: [api, db, ui]
 ---
 

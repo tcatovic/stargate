@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 001: Filter people by name, rank and current duty title</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2330; --muted: #5a6475; --card: #f5f7fa; --border: #d9dee7;
+    --accent: #2457c5; --ok: #1d7a3d; --warn: #9a6200; --bad: #b42318; --code: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --fg: #e4e8ef; --muted: #9aa4b4; --card: #1a2029; --border: #2c3442;
+      --accent: #7aa2ff; --ok: #5fcf86; --warn: #f0b44c; --bad: #ff7b72; --code: #1f2633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 940px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+  h1 { font-size: 1.55rem; line-height: 1.25; margin: .5rem 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  p, li { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size: .92rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+  code { background: var(--code); padding: .08em .3em; border-radius: 4px; }
+  pre { background: var(--code); padding: .8rem; border-radius: 8px; overflow-x: auto; line-height: 1.4; }
+  pre code { background: none; padding: 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem; margin: .8rem 0; }
+  .verdict { border-left: 5px solid var(--accent); }
+  .warn { border-left: 5px solid var(--warn); }
+  .bad { border-left: 5px solid var(--bad); }
+  .tag { display: inline-block; font-size: .78rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; }
+  .tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); } .tag.info { color: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .55rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  nav ol { columns: 2; column-gap: 2rem; padding-left: 1.2rem; }
+  @media (max-width: 560px) { nav ol { columns: 1; } body { font-size: 15px; } }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 001 &middot; branch <code>task/001-search-people-by-name-rank-duty-title</code> &middot; baseline: <code>main</code> at 45e89a7 (tasks 003, 004, 005 merged) &middot; status: awaiting approval (plan and contracts together)</p>
+<h1>Plan 001: Filter people by name, rank and current duty title</h1>
+
+<nav aria-label="Sections">
+<ol>
+  <li><a href="#summary">Summary and verdict</a></li>
+  <li><a href="#current">Current behaviour</a></li>
+  <li><a href="#approach">Approach and decisions</a></li>
+  <li><a href="#changes">Changes by platform</a></li>
+  <li><a href="#contracts-affected">Contracts affected</a></li>
+  <li><a href="#rules">Domain rules</a></li>
+  <li><a href="#tests">Tests</a></li>
+  <li><a href="#risks">Risks and rollout</a></li>
+  <li><a href="#verified">Verified and unverified</a></li>
+  <li><a href="#subtasks">Subtasks</a></li>
+  <li><a href="#qa">What QA checks</a></li>
+  <li><a href="#contracts">Contracts</a></li>
+  <li><a href="#questions">Questions for you</a></li>
+</ol>
+</nav>
+
+<h2 id="summary">1. Summary and verdict</h2>
+<p><code>GET /Person</code> gains optional <code>name</code> (case-insensitive contains), <code>rank</code> and <code>dutyTitle</code> (case-insensitive exact) query filters combined with AND, implemented as one static, parameterised Dapper query over the existing LEFT JOIN. <code>GET /Person/{name}</code> becomes a parameterised, case-insensitive exact lookup that returns 404 for an unknown name. All four inputs are bounded (100 characters) and restricted to the shared character set (letters, digits, space, hyphen, apostrophe, period) using ASP.NET Core model validation, which returns a 400 <code>ValidationProblemDetails</code>. The two touched actions lose their <code>try/catch</code>, so they no longer return <code>ex.Message</code>. The UI client gains <code>listPeople(filters?)</code>, and <code>getPerson</code> maps 404 to <code>null</code>.</p>
+<div class="card verdict">
+<p><strong>Verdict: <span class="tag info">multi</span></strong></p>
+<p>The work spans two platforms (api, ui) with a real contract between them: query parameter names and encoding, the 404 and 400 semantics and bodies, and the unchanged response shape. Once the contract is fixed, the UI client and its Vitest tests do not depend on the API code, so api-dev and ui-dev can work in parallel. The UI part is small, but it is a separate platform with its own toolchain and tests, and a contract avoids drift on the 404 and 400 bodies. No db or infra work is needed (no schema change).</p>
+</div>
+
+<h2 id="current">2. Current behaviour</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Where</th><th>What happens today</th></tr></thead>
+<tbody>
+<tr><td><code>exercise1/api/Controllers/PersonController.cs:20-41</code></td><td><code>GET /Person</code> sends an empty <code>GetPeople</code>. It takes no parameters, so any query string is ignored. The <code>try/catch</code> returns <code>ex.Message</code> in a 500 body.</td></tr>
+<tr><td><code>exercise1/api/Controllers/PersonController.cs:43-64</code></td><td><code>GET /Person/{name}</code> has no validation and the same <code>ex.Message</code> leak on 500.</td></tr>
+<tr><td><code>exercise1/api/Business/Queries/GetPeople.cs:25-27</code></td><td>Static SQL: <code>Person LEFT JOIN AstronautDetail</code>, no WHERE, no ORDER BY, no cancellation token.</td></tr>
+<tr><td><code>exercise1/api/Business/Queries/GetPersonByName.cs:26</code></td><td><code>WHERE '{request.Name}' = a.Name</code>: the route value is interpolated into the SQL. This is a SQL injection hole, and any name containing an apostrophe (for example <code>O'Brien</code>) causes a syntax error and a 500 that returns the SQLite message. The match is exact and case-sensitive.</td></tr>
+<tr><td><code>exercise1/api/Business/Queries/GetPersonByName.cs:30</code></td><td>An unknown name leaves <code>Person = null</code> with the default <code>ResponseCode = 200</code> (<code>Controllers/BaseResponse.cs:9</code>), so the endpoint returns 200 with <code>person: null</code>.</td></tr>
+<tr><td><code>exercise1/api/Controllers/AstronautDutyController.cs:19-27</code></td><td><code>GET /AstronautDuty/{name}</code> also sends <code>GetPersonByName</code>, so it inherits whatever this task changes in that handler (see <a href="#risks">Risks</a>). The endpoint itself is out of scope.</td></tr>
+<tr><td><code>exercise1/api/Business/Dtos/PersonAstronaut.cs:9-11</code></td><td>For a person with no astronaut assignment, the LEFT JOIN yields NULL and Dapper leaves the <code>""</code> defaults, so <code>currentRank</code> and <code>currentDutyTitle</code> are <code>""</code> (not null). This is pinned by <code>api.Tests/ResponseShapeTests.cs:97-128</code> and <code>NullPersonGuardTests.cs:117-136</code>. This task keeps that shape.</td></tr>
+<tr><td><code>exercise1/api/Program.cs:9,19-23</code></td><td>Controllers have <code>[ApiController]</code>, so ASP.NET Core model-state validation already returns 400 <code>ValidationProblemDetails</code> for binding errors. MediatR has one pre-processor and no pipeline behaviours. There is no exception handler middleware.</td></tr>
+<tr><td><code>exercise1/ui/src/app/api/stargate-api.ts:13-19</code></td><td><code>getPeople()</code> (used by <code>app.ts:27</code>) and <code>getPerson(name)</code> returning <code>GetPersonByNameResult</code>, already using <code>encodeURIComponent</code>. <code>getPerson</code> is not used by any component. There is no spec for <code>StargateApi</code>.</td></tr>
+</tbody>
+</table></div>
+<p>The task's premise is correct. I confirmed each problem by reading the code: the interpolation at <code>GetPersonByName.cs:26</code>, the 200-with-null result, and no filter support.</p>
+
+<h2 id="approach">3. Approach and decisions</h2>
+
+<h3>D1. Query design (GetPeople)</h3>
+<p>I keep Dapper (the repo's read pattern) and use <strong>one static SQL string</strong> with named parameters. Values are never concatenated, and the SQL text does not vary with the input.</p>
+<pre><code>SELECT a.Id AS PersonId, a.Name, b.CurrentRank, b.CurrentDutyTitle, b.CareerStartDate, b.CareerEndDate
+FROM [Person] a
+LEFT JOIN [AstronautDetail] b ON b.PersonId = a.Id
+WHERE (@NamePattern IS NULL OR a.Name LIKE @NamePattern ESCAPE '\')
+  AND (@Rank IS NULL OR b.CurrentRank = @Rank COLLATE NOCASE)
+  AND (@DutyTitle IS NULL OR b.CurrentDutyTitle = @DutyTitle COLLATE NOCASE)</code></pre>
+<ul>
+<li><strong>Normalisation in the handler:</strong> each filter is trimmed. A null, empty or whitespace-only value becomes <code>null</code> (no filter). Model binding already turns <code>?name=</code> and <code>?name=%20%20</code> into <code>null</code> (verified).</li>
+<li><strong>LIKE escaping:</strong> <code>NamePattern = "%" + EscapeLike(name) + "%"</code>, where <code>EscapeLike</code> replaces <code>\</code> with <code>\\</code> first, then <code>%</code> with <code>\%</code> and <code>_</code> with <code>\_</code>. The SQL uses <code>ESCAPE '\'</code>. In C#, write the SQL as a verbatim or raw string so the backslash reaches SQLite unchanged. Validation already rejects <code>%</code>, <code>_</code> and <code>\</code> over HTTP, so escaping is defence in depth for direct MediatR callers and handler tests.</li>
+<li><strong>Rule 2:</strong> for an unassigned person, <code>b.CurrentRank</code> and <code>b.CurrentDutyTitle</code> are NULL, so <code>NULL = @x</code> is not true and the person is excluded by any rank or dutyTitle filter. A name-only filter still includes them.</li>
+<li><strong>No ORDER BY change</strong> (Decision: no sorting). Order stays unspecified, as today. Tests compare sets.</li>
+<li>Pass the <code>CancellationToken</code> through <code>CommandDefinition</code>.</li>
+</ul>
+
+<h3>D1b. Single-person lookup (GetPersonByName)</h3>
+<pre><code>SELECT a.Id AS PersonId, a.Name, b.CurrentRank, b.CurrentDutyTitle, b.CareerStartDate, b.CareerEndDate
+FROM [Person] a
+LEFT JOIN [AstronautDetail] b ON b.PersonId = a.Id
+WHERE a.Name = @Name COLLATE NOCASE
+ORDER BY CASE WHEN a.Name = @Name THEN 0 ELSE 1 END, a.Id
+LIMIT 1</code></pre>
+<ul>
+<li>The name is trimmed. The match is exact and case-insensitive. LIKE is not used, so <code>%</code> and <code>_</code> have no wildcard meaning.</li>
+<li>Until task 002 adds the case-insensitive unique index, case-variant duplicates can exist. The ORDER BY makes the choice deterministic: an exact-case match wins, then the lowest Id.</li>
+<li>Not found: <code>Person = null</code>, <code>Success = false</code>, <code>Message = "Person not found"</code>, <code>ResponseCode = 404</code>. This copies the existing pattern in <code>CreateAstronautDutyHandler</code> from task 005. The message never echoes the input. <span class="tag bad">breaking</span>, as agreed in the task.</li>
+</ul>
+
+<h3>D1c. Case-insensitivity in SQLite (verified)</h3>
+<p>SQLite's <code>LIKE</code> and <code>COLLATE NOCASE</code> fold <strong>ASCII letters only</strong>. I checked this against SQLite 3.46:</p>
+<ul>
+<li><code>LIKE '%ÉLENA%'</code> matches <code>Élena</code>, because <code>É</code> is the same character and the ASCII part folds.</li>
+<li><code>LIKE '%élena%'</code> does not match <code>Élena</code>.</li>
+<li><code>= 'ÉLENA' COLLATE NOCASE</code> does not match <code>élena</code>.</li>
+</ul>
+<p>So a non-ASCII letter matches only in the same case. <strong>I recommend accepting this and documenting it.</strong> Every seeded value is ASCII, and task 002's case-insensitive unique index on <code>Person.Name</code> will use the same NOCASE semantics, so lookup and uniqueness agree. Full Unicode folding would need ICU, a custom SQLite function, or in-memory filtering, and is not worth it here (see <a href="#questions">Q3</a>). A characterisation test pins the behaviour so any change is deliberate.</p>
+
+<h3>D2. Validation</h3>
+<ul>
+<li><strong>Where:</strong> ASP.NET Core model validation on the action parameters. <code>[ApiController]</code> already returns 400 automatically. Each parameter gets <code>[StringLength(100)]</code> and <code>[RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage)]</code>. The route parameter also gets <code>MinimumLength = 1</code>.</li>
+<li><strong>Shared rule:</strong> a new <code>exercise1/api/Business/Validation/InputRules.cs</code> defines <code>MaxLength = 100</code>, <code>AllowedCharactersPattern = @"^[\p{L}\p{M}0-9 .'-]+$"</code> and the message. "Letters" means Unicode letters plus combining marks. "Digits" means ASCII 0-9. The typographic apostrophe (U+2019) is not allowed. Tasks 002 and 006 should reuse this class rather than define the rule again. The pattern is linear, so there is no ReDoS risk.</li>
+<li><strong>Same rule for <code>rank</code> and <code>dutyTitle</code>:</strong> the Decision allows any bounded string with no allowed-values list. The AC still asks for allowed characters, so they use the same character set. Every seeded rank (<code>CPT, MAJ, 2LT, LTC</code>) and title (<code>Pilot, Mission Specialist, Flight Engineer, Commander, RETIRED</code>) passes.</li>
+<li><strong>Seed data passes:</strong> all six seeded names are plain ASCII letters and spaces. A test iterates <code>DevelopmentSeedData.People()</code> and asserts every name, rank and title matches the pattern.</li>
+<li><strong>400 body:</strong> the framework's <code>ValidationProblemDetails</code> (<code>type, title, status: 400, errors{param: [messages]}, traceId</code>). Error keys are the parameter names (<code>name</code>, <code>rank</code>, <code>dutyTitle</code>). Messages never contain the submitted value (verified). This is already the app's 400 shape for binding errors, and CLAUDE.md names ProblemDetails as the error shape. It is not a <code>BaseResponse</code>. Its <code>status</code> equals the HTTP status.</li>
+<li><strong>Handlers do not validate.</strong> They normalise (trim) and escape only, so direct MediatR callers stay safe even without the 400.</li>
+</ul>
+<div class="card">
+<p><strong>Alternative rejected: a MediatR validation pipeline behaviour returning a <code>BaseResponse</code> 400.</strong> CLAUDE.md prefers pipeline behaviours for cross-cutting validation, so I considered this first. I rejected it here for four reasons:</p>
+<ol>
+<li>It needs a new generic behaviour, a validator abstraction and DI registrations, which is more code than three attributes.</li>
+<li>It would also validate <code>GET /AstronautDuty/{name}</code>, because that endpoint sends the same <code>GetPersonByName</code> request. That changes an out-of-scope endpoint.</li>
+<li>Throwing from a behaviour would land in the remaining <code>try/catch</code> blocks as a 500 with <code>ex.Message</code>, because there is no global handler yet.</li>
+<li>Swagger would not show the bounds. The framework filter is still cross-cutting (declarative, not copy-pasted), and Swashbuckle emits <code>maxLength</code> and <code>pattern</code> from the same attributes (verified).</li>
+</ol>
+</div>
+
+<h3>D2b. The 500 leak in the touched actions</h3>
+<p>I remove the <code>try/catch</code> from <code>GetPeople</code> and <code>GetPersonByName</code> in <code>PersonController</code>. An unexpected fault then propagates to the host:</p>
+<ul>
+<li>Kestrel logs it at Error level and returns <strong>500 with an empty body</strong> in Production.</li>
+<li>Development shows the developer exception page, which is Development only.</li>
+</ul>
+<p>This is the smallest change that stops the leak and matches the standard ("controllers free of try/catch"). It also gives better observability than today, where the catch swallows the exception without logging it. <code>CreatePerson</code> and <code>AstronautDutyController</code> are not touched. The global exception handler stays out of scope.</p>
+<p><strong>Alternative rejected:</strong> keeping the try/catch with a generic message. It keeps a pattern the standards forbid, and it still swallows the exception without a log entry.</p>
+
+<h3>D3. Swagger</h3>
+<p>No XML comments. <code>GenerateDocumentationFile</code> plus <code>TreatWarningsAsErrors</code> would fail the build on CS1591 for every undocumented public member, and <code>NoWarn</code> is not allowed. Instead, use attributes that Swashbuckle 10.3.0 reads (verified in a scratch app):</p>
+<ul>
+<li><code>[EndpointSummary]</code> and <code>[EndpointDescription]</code> on the action.</li>
+<li><code>[System.ComponentModel.Description]</code> on each parameter.</li>
+<li><code>[ProducesResponseType(typeof(GetPeopleResult), 200)]</code>, <code>(typeof(ValidationProblemDetails), 400)</code>, <code>(typeof(GetPersonByNameResult), 404)</code> and <code>(StatusCodes.Status500InternalServerError)</code> with no type.</li>
+<li><code>maxLength</code>, <code>minLength</code> and <code>pattern</code> come from the validation attributes.</li>
+</ul>
+
+<h3>D4. UI client</h3>
+<ul>
+<li><code>listPeople(filters?: PersonFilters): Observable&lt;GetPeopleResult&gt;</code> builds <code>HttpParams</code>. It trims each value and sets only keys whose trimmed value is non-empty, so no filters produce exactly <code>/api/Person</code>. The default <code>HttpUrlEncodingCodec</code> is safe here: it encodes <code>&amp; # + %</code> and space, and leaves only <code>@ : $ , ; = ? /</code> raw, which is legal in a query value (verified in the installed Angular source). No custom codec is needed.</li>
+<li><code>getPeople()</code> stays, because <code>app.ts</code> uses it. It delegates to <code>listPeople()</code> and requests the same URL, so <code>app.spec.ts</code> passes unchanged.</li>
+<li><code>getPerson(name): Observable&lt;PersonAstronaut | null&gt;</code>. <span class="tag warn">signature change</span>, but there are no callers. It trims the name. A blank name emits <code>null</code> without a request, because <code>/api/Person/</code> would otherwise hit the list endpoint. It encodes with <code>encodeURIComponent</code>. A 200 emits <code>result.person</code>. A 404 emits <code>null</code> and completes. Any other error (400, 500, network) errors with the <code>HttpErrorResponse</code>.</li>
+<li><code>models.ts</code> gains <code>PersonFilters</code> and <code>ValidationProblemDetails</code>. Existing types are unchanged. <code>getDuties</code> is unchanged (out of scope).</li>
+<li>No new screen and no change to <code>app.ts</code> or <code>app.html</code>.</li>
+</ul>
+
+<h3>D5. Test strategy and the new package question</h3>
+<p>The tests are handler-level, with the existing <code>TestDatabase</code> (a per-test SQLite file migrated to latest) for every filter case, plus controller-level tests that build <code>PersonController</code> with a real <code>IMediator</code> from a <code>ServiceCollection</code> over a per-test database. These prove status codes 200 and 404, that <code>responseCode</code> equals the status, and that exceptions propagate rather than leaking. They do not exercise the MVC pipeline: model validation (400), route decoding and Swagger.</p>
+<p>Those need <code>WebApplicationFactory</code> from <strong><code>Microsoft.AspNetCore.Mvc.Testing</code></strong>, which is a new test-only dependency, so CLAUDE.md requires asking first (<a href="#questions">Q2</a>). I recommend adding it; CLAUDE.md already names this as the integration-test approach. If you decline, two things cover the gap. Rule tests run the same attributes through <code>Validator.TryValidateValue</code>, and QA verifies 400, URL encoding and Swagger with curl against the running app. <code>tests.md</code> marks those cases as tier <strong>H</strong> so either path is unambiguous.</p>
+
+<h2 id="changes">4. Changes by platform</h2>
+<h3>api</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>exercise1/api/Business/Validation/InputRules.cs</code> (new)</td><td><code>public static class InputRules</code> with <code>MaxLength</code>, <code>AllowedCharactersPattern</code> and <code>AllowedCharactersMessage</code> constants (see <code>data.md</code>).</td></tr>
+<tr><td><code>exercise1/api/Business/Queries/GetPeople.cs</code></td><td>Request gains <code>string? Name</code>, <code>Rank</code> and <code>DutyTitle</code> (init, default null). Handler normalises, escapes and runs the static parameterised SQL (D1) with the cancellation token. Result is unchanged.</td></tr>
+<tr><td><code>exercise1/api/Business/Queries/GetPersonByName.cs</code></td><td>Parameterised case-insensitive exact SQL (D1b), trims, 404 result when not found, cancellation token. Result type is unchanged.</td></tr>
+<tr><td><code>exercise1/api/Controllers/PersonController.cs</code></td><td><code>GetPeople([FromQuery] string? name, string? rank, string? dutyTitle, CancellationToken)</code> and <code>GetPersonByName([FromRoute] string name, CancellationToken)</code>, each with the validation, Description and Swagger attributes. Remove <code>try/catch</code> from these two actions only. <code>CreatePerson</code> is untouched.</td></tr>
+<tr><td><code>exercise1/api.Tests/GetPeopleQueryTests.cs</code>, <code>GetPersonByNameQueryTests.cs</code>, <code>PersonControllerTests.cs</code>, <code>InputRulesTests.cs</code> (new)</td><td>As listed in <code>tests.md</code>. <code>ResponseShapeTests.cs</code> gains a 404-body shape test. Existing tests must still pass unchanged.</td></tr>
+<tr><td><code>exercise1/api.Tests/PersonHttpTests.cs</code> and <code>StargateAPI.Tests.csproj</code></td><td>Only if Q2 is approved: add <code>Microsoft.AspNetCore.Mvc.Testing</code> 10.0.x and the tier H tests.</td></tr>
+<tr><td><code>exercise1/api/README.md</code></td><td>Changelog entry for the breaking changes below, and a note on ASCII-only case folding.</td></tr>
+</tbody>
+</table></div>
+<h3>ui</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>File</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td><code>exercise1/ui/src/app/api/models.ts</code></td><td>Add <code>PersonFilters</code> and <code>ValidationProblemDetails</code>, exactly as in <code>types.ts</code>.</td></tr>
+<tr><td><code>exercise1/ui/src/app/api/stargate-api.ts</code></td><td>Add <code>listPeople</code>. <code>getPeople</code> delegates to it. Change <code>getPerson</code> to return <code>PersonAstronaut | null</code> with 404 mapped to <code>null</code>.</td></tr>
+<tr><td><code>exercise1/ui/src/app/api/stargate-api.spec.ts</code> (new)</td><td>Vitest with <code>HttpTestingController</code>, cases U1-U15.</td></tr>
+</tbody>
+</table></div>
+<h3>db and infra</h3>
+<p>None. There is no schema change and no migration. No index is added. The table is small, and a leading-wildcard <code>LIKE</code> cannot use an index anyway. The name index belongs to task 002.</p>
+
+<h2 id="contracts-affected">5. Contracts affected</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Endpoint</th><th>Change</th><th></th></tr></thead>
+<tbody>
+<tr><td><code>GET /Person</code></td><td>New optional query parameters <code>name</code>, <code>rank</code> and <code>dutyTitle</code>. The 200 shape is unchanged.</td><td><span class="tag ok">additive</span></td></tr>
+<tr><td><code>GET /Person</code></td><td>Invalid filter (over 100 characters, or a disallowed character) now returns 400 <code>ValidationProblemDetails</code>. Previously the parameters were ignored.</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>GET /Person/{name}</code></td><td>Unknown name returns 404 with <code>{person: null, success: false, message: "Person not found", responseCode: 404}</code>. Previously it returned 200 with <code>person: null</code>.</td><td><span class="tag bad">breaking (agreed)</span></td></tr>
+<tr><td><code>GET /Person/{name}</code></td><td>The match is now case-insensitive and ignores surrounding whitespace. An invalid name returns 400.</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>GET /Person</code>, <code>GET /Person/{name}</code></td><td>A 500 has an empty body (Production) instead of a <code>BaseResponse</code> carrying the exception message.</td><td><span class="tag bad">breaking (error path only)</span></td></tr>
+<tr><td><code>GET /AstronautDuty/{name}</code> (out of scope, side effect)</td><td>It shares <code>GetPersonByName</code>, so an unknown name now returns 404 and the match is case-insensitive. No validation is added. Its try/catch remains. The UI's <code>getDuties</code> is not used by any component.</td><td><span class="tag bad">breaking (side effect)</span></td></tr>
+<tr><td>UI <code>StargateApi.getPerson</code></td><td>Returns <code>Observable&lt;PersonAstronaut | null&gt;</code> instead of <code>Observable&lt;GetPersonByNameResult&gt;</code>. There are no callers.</td><td><span class="tag warn">internal API change</span></td></tr>
+</tbody>
+</table></div>
+<p>There are no schema changes or migrations. The full machine contract is in <code>docs/contracts/001/openapi.yaml</code>.</p>
+
+<h2 id="rules">6. Domain rules</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Rule</th><th>How it stays true</th></tr></thead>
+<tbody>
+<tr><td>1. A Person is uniquely identified by Name</td><td>The lookup is exact and case-insensitive, consistent with task 002's planned NOCASE unique index. Until that index exists, case-variant duplicates are resolved deterministically (exact case first, then lowest Id) and a test pins this. Read-only task: no writes, so no new race.</td></tr>
+<tr><td>2. No assignment means no astronaut rows</td><td>The LEFT JOIN yields NULL for unassigned people. NULL comparisons exclude them from rank and dutyTitle filters, while the unfiltered and name-only lists still include them with <code>""</code> rank/title and null dates (shape unchanged). An empty filter value means "no filter", so <code>""</code> can never match them. Tests P7 and N10 cover this.</td></tr>
+<tr><td>3-7 (duty rules)</td><td>Not touched. Filters read the current rank and title from <code>AstronautDetail</code>, as the Outcome requires.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="tests">7. Tests</h2>
+<p>The full Given/When/Then list is in <code>docs/contracts/001/tests.md</code>. In outline:</p>
+<ul>
+<li><strong>Handler, GetPeople (P1-P11):</strong>
+  <ul>
+  <li>No filter returns everyone.</li>
+  <li>Each filter alone, case-insensitive, and contains versus exact (<code>MA</code> does not match <code>MAJ</code>).</li>
+  <li>Combined AND, and no match returns an empty 200.</li>
+  <li>Unassigned people are excluded by rank and title filters but included by name.</li>
+  <li>Injection strings in every filter return empty, and the tables are intact.</li>
+  <li>Literal <code>%</code>, <code>_</code> and <code>\</code> are escaped.</li>
+  <li>Whitespace is normalised.</li>
+  <li>Non-ASCII characterisation.</li>
+  </ul>
+</li>
+<li><strong>Handler, GetPersonByName (N1-N10):</strong>
+  <ul>
+  <li>Exact match, different case, and trimmed.</li>
+  <li>Unknown returns 404 with a body that does not echo the input.</li>
+  <li>A partial name returns 404, and <code>%</code> or <code>_</code> return 404.</li>
+  <li><code>x' OR '1'='1</code> and <code>'; DROP TABLE Person; --</code> return 404, and the tables are intact.</li>
+  <li>An apostrophe name is found.</li>
+  <li>Case-duplicate tie-break.</li>
+  <li>Unassigned person shape.</li>
+  </ul>
+</li>
+<li><strong>Rules (R1-R4):</strong> seed data passes. The valid and invalid lists include hostile strings, control characters, 100 versus 101 characters, <code>%</code>, <code>_</code>, <code>/</code> and <code>&lt;script&gt;</code>.</li>
+<li><strong>Controller (C1-C5):</strong> 200 and 404 with <code>responseCode</code> equal to the status, filters forwarded, and an exception from an unmigrated database propagates (no 500 body built from <code>ex.Message</code>).</li>
+<li><strong>Shape (S1):</strong> the 404 body serialises as <code>success: false</code>, <code>responseCode: 404</code> and <code>person: null</code>.</li>
+<li><strong>HTTP, tier H (H1-H9):</strong> 400 for each invalid parameter, URL-encoded names (<code>%20</code>, <code>%27</code>), the literal injection string, empty parameters, and the Swagger document. These run in xUnit if Q2 is approved, otherwise through QA.</li>
+<li><strong>UI (U1-U15):</strong> the query string for each filter combination, omitting empty values, trimming, encoding <code>&amp; + space '</code>, the empty result, 200, 404 mapped to <code>null</code>, 400 and 500 errors, reserved characters in the path, a blank name sending no request, and <code>getPeople</code> unchanged.</li>
+</ul>
+<p>Gates: <code>dotnet build -warnaserror</code> with zero warnings, <code>dotnet test</code> green, <code>npm test -- --watch=false</code> and <code>npm run build</code> green.</p>
+
+<h2 id="risks">8. Risks and rollout</h2>
+<ul>
+<li><strong>Data impact:</strong> none. Read-only, no migration.</li>
+<li><strong>Backward compatibility:</strong> the breaking items in section 5 go in the API README changelog. The only known client is this repo's UI, which is updated in the same branch.</li>
+<li><strong><code>/AstronautDuty/{name}</code> side effect:</strong> sharing the handler means it also gets 404 and case-insensitivity. This is the correct direction (task 005's notes already asked for a 404 there), but it is visible. The alternative, a separate handler just to keep the old wrong behaviour, adds code for no benefit.</li>
+<li><strong>Stored values outside the character set:</strong> <code>POST /Person</code> and <code>POST /AstronautDuty</code> do not validate yet (tasks 006 and 002). A person or rank stored with, for example, <code>/</code> or <code>&amp;</code> cannot be fetched or filtered by that exact value (400). This is acceptable before go-live; the seed data is clean.</li>
+<li><strong>Non-ASCII case folding</strong> is limited to ASCII (D1c). It is documented and pinned by a test.</li>
+<li><strong>Performance:</strong> the <code>(@p IS NULL OR ...)</code> form and the leading-wildcard LIKE mean a full scan. That is fine at this data size. Revisit with paging.</li>
+<li><strong>Rollback:</strong> revert the merge commit. There is no state to undo.</li>
+</ul>
+
+<h2 id="verified">9. Verified and unverified</h2>
+<p><strong>Verified</strong> in a scratch app under <code>/tmp</code> (deleted afterwards) with .NET 10, Swashbuckle 10.3.0, <code>[ApiController]</code> and <code>TreatWarningsAsErrors</code>:</p>
+<ul>
+<li><code>?name=</code> and <code>?name=%20%20</code> bind as <code>null</code>.</li>
+<li><code>?name=O%27Brien</code> binds as <code>O'Brien</code>.</li>
+<li><code>?name=x%27%20OR%20%271%27%3D%271</code>, <code>?name=a%2Bb</code> and a 101-character value each return 400 <code>ValidationProblemDetails</code> with an <code>errors.name</code> key and no echo of the value.</li>
+<li><code>?name=a+b</code> binds as <code>a b</code>.</li>
+<li><code>?name=%C3%89lena</code> binds as <code>Élena</code>.</li>
+<li><code>/Person/Mira%20Okafor</code> binds as <code>Mira Okafor</code>, and <code>/Person/O%27Brien</code> binds as <code>O'Brien</code>.</li>
+<li><code>/Person/a%2Fb</code> returns 400, and <code>/Person/%20</code> returns 400 ("required").</li>
+<li>Swagger shows the summary, description, parameter descriptions, <code>maxLength</code>, <code>minLength</code>, <code>pattern</code> and the 400 <code>ValidationProblemDetails</code> schema.</li>
+<li>SQLite 3.46 LIKE/NOCASE/ESCAPE behaviour, including <code>(? IS NULL OR ...)</code> with a NULL parameter.</li>
+<li>Angular's <code>HttpUrlEncodingCodec</code> replacement list (installed source).</li>
+</ul>
+<p><strong>Unverified</strong> (each with a cheap check for the developer or QA):</p>
+<ol>
+<li>The bundled SQLite in <code>Microsoft.Data.Sqlite</code> behaves like the 3.46 probe for LIKE/NOCASE/ESCAPE with Dapper parameters. Check: tests P2, P9 and P11 fail if not.</li>
+<li>The 400 content type is <code>application/problem+json</code>. Check: <code>curl -i</code> (QA). The UI does not depend on it.</li>
+<li>A raw <code>=</code> inside a query value (Angular leaves it unencoded) is kept by ASP.NET as part of the value. Check: <code>curl '/Person?name=a=b'</code> returns a 400 on <code>errors.name</code>, because <code>=</code> is disallowed.</li>
+<li>An unhandled exception gives a logged 500 with an empty body in Production. Check: run with <code>ASPNETCORE_ENVIRONMENT=Production</code> against a database path to an empty file (no tables) and <code>curl -i /Person</code>.</li>
+<li>Only if Q2 is approved: <code>Microsoft.AspNetCore.Mvc.Testing</code> 10.0.x restores through the sandbox proxy, <code>Program</code> is accessible to <code>WebApplicationFactory&lt;Program&gt;</code> under .NET 10, and <code>builder.UseSetting("ConnectionStrings:StarbaseApiDatabase", ...)</code> is visible to <code>StarbaseDatabase.FromConfiguration</code> before <code>Build()</code>. Check: <code>dotnet add package</code> plus one smoke test. If <code>Program</code> is not accessible, add <code>public partial class Program;</code> at the end of <code>Program.cs</code>. Use a per-test <code>TestDatabase</code> path so the Development initializer never touches <code>starbase.db</code>.</li>
+</ol>
+
+<h2 id="subtasks">10. Subtasks</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>Platform / agent</th><th>Scope</th><th>Depends on</th></tr></thead>
+<tbody>
+<tr><td>S1</td><td>api / api-dev</td><td><code>InputRules</code>, both handlers, both controller actions, Swagger attributes, the tests in <code>tests.md</code> (P, N, R, C, S, plus H if Q2 is approved), README changelog.</td><td>Approved contracts</td></tr>
+<tr><td>S2</td><td>ui / ui-dev</td><td><code>models.ts</code>, <code>stargate-api.ts</code>, <code>stargate-api.spec.ts</code> (U1-U15). Builds against <code>types.ts</code> and <code>openapi.yaml</code> only.</td><td>Approved contracts (parallel with S1)</td></tr>
+<tr><td>S3</td><td>lead</td><td>Integrate both worktrees, then run build and tests for both platforms.</td><td>S1, S2</td></tr>
+<tr><td>S4</td><td>qa-tester</td><td>Section 11 against the real app, report in <code>docs/qa/001...html</code>.</td><td>S3</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="qa">11. What QA checks</h2>
+<p>Run the API in Development so the task 004 seed applies (six people, two unassigned). Use the UI dev proxy for the client check.</p>
+<ul>
+<li><code>GET /Person</code> returns 6 people. Mira Okafor and Kenji Watanabe have <code>""</code> rank and title and null dates.</li>
+<li><code>?name=ra</code> returns Mira Okafor and Priya Raman.</li>
+<li><code>?name=ELENA</code> returns Elena Vasquez.</li>
+<li><code>?rank=maj</code> returns Priya Raman and Elena Vasquez.</li>
+<li><code>?rank=MA</code> returns an empty list with 200.</li>
+<li><code>?dutyTitle=pilot</code> returns Tomas Lindqvist only. Elena's current title is Commander.</li>
+<li><code>?dutyTitle=Pil</code> returns an empty list.</li>
+<li><code>?dutyTitle=retired</code> returns Desmond Achebe.</li>
+<li><code>?rank=MAJ&amp;dutyTitle=commander</code> returns Elena Vasquez.</li>
+<li><code>?name=Mira&amp;rank=CPT</code> returns an empty list (Mira is unassigned).</li>
+<li><code>?name=kenji</code> returns Kenji Watanabe (unassigned, but matched by name).</li>
+<li><code>?name=</code> returns all 6.</li>
+<li><code>/Person/mira%20okafor</code> returns 200 with Mira Okafor.</li>
+<li><code>/Person/Mira</code> returns 404.</li>
+<li><code>/Person/Nobody</code> returns 404 with <code>responseCode</code> 404 and <code>success</code> false.</li>
+<li>Injection and validation:
+  <ul>
+  <li><code>/Person/x'%20OR%20'1'%3D'1</code> returns 400 (per Q1).</li>
+  <li><code>?name=x'%20OR%20'a'%20LIKE%20'a</code> returns 200 with an empty list.</li>
+  <li><code>?name=%25</code> and <code>?name=_</code> return 400.</li>
+  <li>A 101-character name returns 400.</li>
+  <li>Afterwards, the people count is still 6.</li>
+  </ul>
+</li>
+<li>Apostrophe round trip:
+  <ul>
+  <li><code>POST /Person</code> with body <code>"Aoife O'Brien"</code>.</li>
+  <li><code>/Person/aoife%20o'brien</code> returns 200. Before this change it returned 500.</li>
+  <li><code>?name=o'bri</code> returns her.</li>
+  <li>This changes the local dev database, which is not tracked in git. Delete <code>starbase.db</code> afterwards to reseed.</li>
+  </ul>
+</li>
+<li><code>/AstronautDuty/Nobody</code> returns 404 (side effect, record it).</li>
+<li>The touched actions never return a 500 body containing exception text (unverified item 4).</li>
+<li><code>/swagger/v1/swagger.json</code> shows the three query parameters with <code>maxLength</code> 100 and <code>pattern</code>, the path parameter, and responses 200/400/404/500 on both operations.</li>
+<li>UI: <code>npm test -- --watch=false</code> and <code>npm run build</code> pass, and with <code>npm start</code> the people table still loads through the proxy.</li>
+</ul>
+
+<h2 id="contracts">12. Contracts</h2>
+<ul>
+<li><a href="../contracts/001/contract.html"><code>docs/contracts/001/contract.html</code></a>: one-page summary to approve, with breaking changes flagged</li>
+<li><a href="../contracts/001/openapi.yaml"><code>docs/contracts/001/openapi.yaml</code></a>: both endpoints, parameters, 200/400/404/500, schemas</li>
+<li><a href="../contracts/001/types.ts"><code>docs/contracts/001/types.ts</code></a>: exact UI types and <code>StargateApi</code> signatures</li>
+<li><a href="../contracts/001/data.md"><code>docs/contracts/001/data.md</code></a>: queries, validation rule, how rules 1 and 2 are enforced (no schema change)</li>
+<li><a href="../contracts/001/tests.md"><code>docs/contracts/001/tests.md</code></a>: Given/When/Then per platform</li>
+</ul>
+
+<h2 id="questions">13. Questions for you</h2>
+<div class="card warn">
+<p><strong>Q1. The injection acceptance criterion versus the character-set rule.</strong> The AC says <code>x' OR '1'='1</code> gets 404 on <code>GET /Person/{name}</code> and an empty list as a <code>name</code> filter. The AC also requires an allowed character set, and <code>=</code> is not in it, so over HTTP that exact string is rejected with 400 before any SQL runs.</p>
+<p><em>Recommendation:</em> keep the character set on all four inputs. Prove parameterisation with the literal string at handler level (404 and empty list). Over HTTP, prove it with apostrophe strings that pass validation (<code>x' OR 'a' LIKE 'a</code> gives an empty list, and a real <code>O'Brien</code> name round-trips). Expect a 400 for the literal string.</p>
+<p><em>Alternative:</em> the route value gets only a length check, so the literal AC holds (404). This weakens input validation, and only the route regex changes in the contract.</p>
+</div>
+<div class="card warn">
+<p><strong>Q2. Add <code>Microsoft.AspNetCore.Mvc.Testing</code> (test project only)?</strong> It is needed to test 400 validation, URL decoding and Swagger in xUnit.</p>
+<p><em>Recommendation:</em> yes. It is first-party and test-only, and CLAUDE.md names <code>WebApplicationFactory</code> as the integration approach.</p>
+<p><em>If no:</em> controller-level and rule tests stay, and QA covers tier H by hand on every change, so a regression there would not be caught in CI.</p>
+</div>
+<div class="card warn">
+<p><strong>Q3. Accept ASCII-only case-insensitivity?</strong> <code>élena</code> will not find <code>Élena</code>.</p>
+<p><em>Recommendation:</em> accept and document. The data is ASCII, and task 002's NOCASE unique index will behave the same way. Revisit if non-ASCII names matter.</p>
+</div>
+</main>
+</body>
+</html>

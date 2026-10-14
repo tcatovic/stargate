@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 003: CareerStartDate non-nullable migration and database setup</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1d2330; --muted: #5a6475; --card: #f5f7fa; --border: #d9dee7;
+    --accent: #2457c5; --ok: #1d7a3d; --warn: #9a6200; --bad: #b42318; --code: #eef1f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --fg: #e4e8ef; --muted: #9aa4b4; --card: #1a2029; --border: #2c3442;
+      --accent: #7aa2ff; --ok: #5fcf86; --warn: #f0b44c; --bad: #ff7b72; --code: #1f2633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
+  h1 { font-size: 1.55rem; line-height: 1.25; margin: .5rem 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 2.2rem 0 .6rem; padding-bottom: .3rem; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 .4rem; }
+  p, li { overflow-wrap: anywhere; }
+  .meta { color: var(--muted); font-size: .92rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .88em; }
+  code { background: var(--code); padding: .08em .3em; border-radius: 4px; }
+  pre { background: var(--code); padding: .8rem; border-radius: 8px; overflow-x: auto; line-height: 1.4; }
+  pre code { background: none; padding: 0; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: .8rem 1rem; margin: .8rem 0; }
+  .verdict { border-left: 5px solid var(--accent); }
+  .warn { border-left: 5px solid var(--warn); }
+  .bad { border-left: 5px solid var(--bad); }
+  .tag { display: inline-block; font-size: .78rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px; border: 1px solid currentColor; }
+  .tag.ok { color: var(--ok); } .tag.warn { color: var(--warn); } .tag.bad { color: var(--bad); } .tag.info { color: var(--accent); }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: .93rem; }
+  th, td { text-align: left; vertical-align: top; padding: .45rem .55rem; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  nav ol { columns: 2; column-gap: 2rem; padding-left: 1.2rem; }
+  @media (max-width: 560px) { nav ol { columns: 1; } }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<p class="meta">Task 003 &middot; branch <code>task/003-career-start-date-non-nullable-migration</code> &middot; plan written 2026-10-14 &middot; status: awaiting user approval</p>
+<h1>Make <code>AstronautDetail.CareerStartDate</code> non-nullable and document database creation</h1>
+
+<nav class="card">
+  <ol>
+    <li><a href="#summary">Summary and verdict</a></li>
+    <li><a href="#verified">What was verified</a></li>
+    <li><a href="#current">Current behaviour</a></li>
+    <li><a href="#approach">Approach and decisions</a></li>
+    <li><a href="#changes">Changes by platform</a></li>
+    <li><a href="#contracts">Contracts affected</a></li>
+    <li><a href="#rules">Domain rules</a></li>
+    <li><a href="#tests">Tests</a></li>
+    <li><a href="#risks">Risks and rollout</a></li>
+    <li><a href="#unverified">Unverified items (checks required)</a></li>
+    <li><a href="#oos">Out of scope but found</a></li>
+    <li><a href="#questions">Questions for the user</a></li>
+  </ol>
+</nav>
+
+<h2 id="summary">1. Summary and verdict</h2>
+<div class="card verdict">
+  <p><strong>Verdict: <span class="tag info">simple</span></strong>, implemented by <strong>api-dev only</strong>.</p>
+  <p>All the work is in the API project and its migrations (the "db" platform here is just EF migrations inside <code>exercise1/api</code>), plus a new test project and two README files. There is no HTTP contract change and no UI change. The subtasks depend on each other in order (migration, then path resolution, then tests, then docs), so parallel agents would not help. No contracts folder is written.</p>
+</div>
+<p>The task's premise is correct. I confirmed it in a scratch copy of the API outside the repo: <code>dotnet ef migrations has-pending-model-changes</code> exits 1 with "Changes have been made to the model since the last migration". The one drift is <code>CareerStartDate</code>, and the snapshot's <code>ProductVersion</code> is <code>7.0.15</code>. One part of the premise is narrower than stated: <code>dotnet ef</code> and <code>dotnet run</code> already resolve to the same file. The real divergence is running the built binary directly (see <a href="#current">section 3</a>).</p>
+<p>The plan:</p>
+<ul>
+  <li><strong>Migration.</strong> Add one migration, <code>MakeCareerStartDateRequired</code>. Remove the <code>defaultValue</code> backfill that the scaffolder adds. Add a guard in <code>Up</code> that aborts with a clear message when NULLs exist. Keep the scaffolded <code>Down</code>.</li>
+  <li><strong>Database path.</strong> Bake the API project folder into the assembly at build time. Resolve any relative <code>Data Source</code> against that folder in one helper, called from <code>Program.cs</code>.</li>
+  <li><strong>Docs.</strong> Document the database procedure in <code>exercise1/api/README.md</code> and link it from <code>exercise1/README.md</code>.</li>
+  <li><strong>Tests.</strong> Create <code>exercise1/api.Tests</code> (xUnit). This needs the user's approval to add packages.</li>
+</ul>
+
+<h2 id="verified">2. What was verified (scratch copy, .NET SDK 10.0.402, dotnet-ef 10.0.13)</h2>
+<div class="table-wrap"><table>
+<tr><th>Claim</th><th>Result</th></tr>
+<tr><td>Current chain has pending model changes</td><td><span class="tag ok">verified</span> exit 1</td></tr>
+<tr><td><code>dotnet ef migrations add</code> scaffolds <code>AlterColumn</code> with <code>defaultValue: new DateTime(1,1,1,...)</code></td><td><span class="tag ok">verified</span> The generated SQL copies rows with <code>IFNULL("CareerStartDate", '0001-01-01 00:00:00')</code>. That is a <strong>silent backfill</strong> and violates the "no backfill" decision.</td></tr>
+<tr><td>The SQLite <code>AlterColumn</code> rebuilds the table in three transactions: (1) create <code>ef_temp_AstronautDetail</code> and copy rows; (2) with <code>PRAGMA foreign_keys = 0</code>, drop the old table and rename the new one; (3) recreate <code>IX_AstronautDetail_PersonId</code>. The history row is written last.</td><td><span class="tag ok">verified</span> via <code>dotnet ef migrations script</code></td></tr>
+<tr><td>Guard (temp table plus temp trigger <code>RAISE(ABORT, ...)</code>) placed before <code>AlterColumn</code> runs inside transaction (1)</td><td><span class="tag ok">verified</span> in the generated script</td></tr>
+<tr><td>NULL rows present: <code>dotnet ef database update</code> exits 1 with the custom message. The schema, rows and <code>__EFMigrationsHistory</code> are unchanged. No <code>ef_temp_*</code> or guard objects are left behind.</td><td><span class="tag ok">verified</span> The file bytes do change because EF's <code>__EFMigrationsLock</code> row is inserted and then deleted. The data is unchanged.</td></tr>
+<tr><td>Without the guard (only <code>defaultValue</code> removed), the failure is also atomic, but the message is <code>SQLite Error 19: 'NOT NULL constraint failed: ef_temp_AstronautDetail.CareerStartDate'</code></td><td><span class="tag ok">verified</span> The guard is still needed to give a clear message.</td></tr>
+<tr><td>Applies to an <code>InitialCreate</code> database with no rows and with rows. Existing values are preserved. The FK still cascades. The unique index is recreated. The column is <code>NOT NULL</code>.</td><td><span class="tag ok">verified</span> via <code>PRAGMA table_info</code> / <code>foreign_key_list</code> / <code>sqlite_master</code></td></tr>
+<tr><td><code>Down</code> (<code>database update InitialCreate</code>) makes the column nullable again and keeps the rows. Re-applying <code>Up</code> then works.</td><td><span class="tag ok">verified</span></td></tr>
+<tr><td>Fresh (missing) file, and a 0-byte <code>starbase.db</code>: <code>database update</code> creates all tables and records both history rows</td><td><span class="tag ok">verified</span></td></tr>
+<tr><td>Running it again on an up-to-date database prints "No migrations were applied. The database is already up to date." and exits 0</td><td><span class="tag ok">verified</span></td></tr>
+<tr><td>After the migration, <code>has-pending-model-changes</code> reports "No changes have been made to the model since the last migration."</td><td><span class="tag ok">verified</span></td></tr>
+<tr><td><code>dotnet ef --project &lt;api&gt;</code> started from the parent folder or from an unrelated folder creates <code>&lt;api&gt;/starbase.db</code></td><td><span class="tag ok">verified</span> <code>dotnet ef</code> runs <code>Program.cs</code>'s host with the project folder as working directory. There is no <code>IDesignTimeDbContextFactory</code>.</td></tr>
+<tr><td><code>dotnet run --project &lt;api&gt;</code> from an unrelated folder, with and without a launch profile: content root is the project folder and the DB is created at <code>&lt;api&gt;/starbase.db</code></td><td><span class="tag ok">verified</span></td></tr>
+<tr><td>Built binary run directly from an unrelated folder (<code>dotnet bin/Debug/net10.0/StargateAPI.dll</code> or the apphost): content root is the <em>current directory</em> and <code>GET /Person</code> returns 500</td><td><span class="tag ok">verified</span> that the content root is the cwd and that it returns 500. <span class="tag warn">unverified</span> cause, probably that <code>appsettings.json</code> is not found under that content root, so the connection string is null.</td></tr>
+<tr><td>Dapper reads use named columns (<code>GetPeople.cs:25</code>, <code>GetPersonByName.cs:26</code>, <code>GetAstronautDutiesByName.cs:28</code>, <code>CreateAstronautDuty.cs:60</code>), so the column reordering caused by the rebuild has no effect</td><td><span class="tag ok">verified</span> by reading the code</td></tr>
+</table></div>
+
+<h2 id="current">3. Current behaviour</h2>
+<ul>
+  <li><code>exercise1/api/Program.cs:13-14</code> registers <code>UseSqlite(builder.Configuration.GetConnectionString("StarbaseApiDatabase"))</code>. The value is not resolved and migrations are never applied (applying them stays out of scope; task 004 handles it).</li>
+  <li><code>exercise1/api/appsettings.json:2-4</code> sets <code>"StarbaseApiDatabase": "Data Source=starbase.db"</code>, a relative path. SQLite resolves it against the process working directory.</li>
+  <li><code>exercise1/api/Business/Data/AstronautDetail.cs:18</code> declares <code>public DateTime CareerStartDate</code>, which is non-nullable.</li>
+  <li><code>exercise1/api/Business/Migrations/20240122154939_InitialCreate.cs:36</code> creates <code>CareerStartDate</code> with <code>nullable: true</code>. <code>StargateContextModelSnapshot.cs:127</code> has <code>DateTime?</code>, and <code>:116</code> has <code>ProductVersion "7.0.15"</code>.</li>
+  <li><code>exercise1/api/Business/Dtos/PersonAstronaut.cs:13</code> has <code>DateTime? CareerStartDate</code>. It <strong>must stay nullable</strong>: the read queries LEFT JOIN Person to AstronautDetail, so people who are not astronauts get NULL.</li>
+  <li>A 0-byte <code>exercise1/api/starbase.db</code> exists in this checkout (gitignored, see <code>.gitignore</code> <code>*.db</code>). This is the "empty file, no tables" symptom.</li>
+  <li><code>.claude/hooks/protect-files.sh</code> blocks Edit/Write on any <em>existing</em> file under <code>*/Business/Migrations/*</code>. This includes a migration that was scaffolded a moment earlier in the same task. See <a href="#questions">Questions</a>.</li>
+  <li>There are no test projects and no CI workflow (<code>.github/</code> has only the PR template).</li>
+</ul>
+
+<h2 id="approach">4. Approach and decisions</h2>
+
+<h3>4a. Migration (decided)</h3>
+<p>Generate the migration with the tool so the snapshot and Designer file are produced by EF, not written by hand:</p>
+<pre><code>cd exercise1/api
+dotnet ef migrations add MakeCareerStartDateRequired -o Business/Migrations --namespace StargateAPI.Migrations</code></pre>
+<p>Use <code>--namespace StargateAPI.Migrations</code> to match <code>InitialCreate</code> and the snapshot. Without it, the tool emits <code>StargateAPI.Business.Migrations</code>. The tool rewrites the snapshot: <code>CareerStartDate</code> becomes <code>DateTime</code> and <code>ProductVersion</code> becomes <code>10.0.13</code>. That is the only semantic change. The existing files use CRLF and the regenerated snapshot uses LF (per <code>.editorconfig</code>), so the git diff shows a whole-file rewrite. Reviewers should use <code>git diff --ignore-cr-at-eol</code>.</p>
+<p>Then edit the new migration's <code>Up</code> (this needs the hook question resolved first):</p>
+<ol>
+  <li><strong>Delete</strong> the line <code>defaultValue: new DateTime(1, 1, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),</code>. This removes the silent <code>IFNULL(..., '0001-01-01')</code> backfill.</li>
+  <li><strong>Insert this guard before</strong> the <code>AlterColumn</code> call. This exact form was verified:</li>
+</ol>
+<pre><code>// No backfill (task 003): abort, changing nothing, if any row lacks a CareerStartDate.
+// SQLite has no RAISE outside triggers, so a temp trigger on a temp table raises the error.
+migrationBuilder.Sql(
+    """
+    CREATE TEMP TABLE "__guard_CareerStartDate" ("x" INTEGER);
+    CREATE TEMP TRIGGER "__guard_CareerStartDate_check" BEFORE INSERT ON "__guard_CareerStartDate"
+    WHEN EXISTS (SELECT 1 FROM main."AstronautDetail" WHERE "CareerStartDate" IS NULL)
+    BEGIN
+        SELECT RAISE(ABORT, 'MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate. No data was changed. Delete starbase.db and run dotnet ef database update, or set CareerStartDate on those rows first.');
+    END;
+    INSERT INTO "__guard_CareerStartDate" ("x") VALUES (1);
+    DROP TABLE "__guard_CareerStartDate";
+    """);</code></pre>
+<p><code>Down</code> stays as scaffolded: <code>AlterColumn</code> back to <code>nullable: true</code>. The SQL is constant, with no interpolation, so it complies with the "no interpolated SQL" rule.</p>
+<p><strong>Why the failure is atomic.</strong> EF puts the guard in the same transaction as the creation of <code>ef_temp_AstronautDetail</code> and the row copy. <code>RAISE(ABORT)</code> stops the run before any later statement. The transaction rolls back, which removes the temp objects. The history row is never written. This was verified on a database with a NULL row.</p>
+<p><strong>Alternatives rejected.</strong></p>
+<ul>
+  <li><em>Only remove <code>defaultValue</code> and rely on <code>NOT NULL</code>.</em> The failure is atomic, but the message (<code>NOT NULL constraint failed: ef_temp_AstronautDetail.CareerStartDate</code>) fails the "clear message" criterion.</li>
+  <li><em>Temp table with a named CHECK constraint.</em> This works in principle, but the message is limited to a constraint name. I did not test it.</li>
+  <li><em>A C# pre-check.</em> <code>Up</code> only builds operations. It cannot query data, and it would not work in <code>migrations script</code> output.</li>
+  <li><em>Hand-writing the SQL table rebuild.</em> This duplicates EF's rebuild and risks a snapshot mismatch.</li>
+</ul>
+
+<h3>4b. Connection string resolution (decided: one mechanism)</h3>
+<p><strong>Mechanism.</strong> The API project folder is baked into the assembly at build time. One helper resolves any relative SQLite <code>Data Source</code> against it, and <code>Program.cs</code> calls that helper. <code>dotnet ef</code> runs <code>Program.cs</code>'s host (verified), so both tools go through the same code path.</p>
+<ul>
+  <li><code>StargateAPI.csproj</code>: add <code>&lt;AssemblyMetadata Include="StargateApiProjectDirectory" Value="$(MSBuildProjectDirectory)" /&gt;</code> in an <code>ItemGroup</code>.</li>
+  <li>New <code>exercise1/api/Business/Data/StarbaseDatabase.cs</code>, a <code>public static class StarbaseDatabase</code> with:
+    <ul>
+      <li><code>public const string ConnectionStringName = "StarbaseApiDatabase";</code></li>
+      <li><code>public const string DefaultConnectionString = "Data Source=starbase.db";</code></li>
+      <li><code>public static string ProjectDirectory { get; }</code>, which reads the <code>StargateApiProjectDirectory</code> <code>AssemblyMetadataAttribute</code> from <code>typeof(StarbaseDatabase).Assembly</code>. If the attribute is missing, it throws <code>InvalidOperationException</code>. No <code>!</code>.</li>
+      <li><code>public static string ResolveConnectionString(string? configured, string baseDirectory)</code>, a pure function (tested directly):
+        <ol>
+          <li>If <code>configured</code> is null or whitespace, use <code>DefaultConnectionString</code>. This covers the run-the-dll case where <code>appsettings.json</code> is not under the content root.</li>
+          <li>Parse with <code>SqliteConnectionStringBuilder</code>.</li>
+          <li>Leave the string unchanged if <code>DataSource</code> is empty, <code>:memory:</code>, <code>Mode=Memory</code>, or already rooted (<code>Path.IsPathRooted</code>).</li>
+          <li>Otherwise set <code>DataSource = Path.GetFullPath(Path.Combine(baseDirectory, dataSource))</code>.</li>
+          <li>If the resulting directory does not exist, throw <code>InvalidOperationException("Database directory '{dir}' does not exist. Set ConnectionStrings__StarbaseApiDatabase to an absolute path.")</code>. This prevents a stray empty file being created elsewhere, for example in a published build where the baked folder is absent.</li>
+          <li>Return <code>builder.ToString()</code>. Other keywords such as <code>Cache</code> and <code>Pooling</code> are kept.</li>
+        </ol>
+      </li>
+    </ul>
+  </li>
+  <li><code>Program.cs:13-14</code> becomes <code>options.UseSqlite(StarbaseDatabase.ResolveConnectionString(builder.Configuration.GetConnectionString(StarbaseDatabase.ConnectionStringName), StarbaseDatabase.ProjectDirectory))</code>.</li>
+</ul>
+<p><strong>Override.</strong> Standard configuration precedence applies: <code>appsettings.json</code>, then <code>appsettings.{Env}.json</code>, then user-secrets in Development, then the environment variable <code>ConnectionStrings__StarbaseApiDatabase</code>, then the command line (<code>--ConnectionStrings:StarbaseApiDatabase=...</code>). An absolute path is used as is. A relative override is still anchored to the project folder. <code>dotnet ef ... --connection "..."</code> bypasses <code>Program.cs</code> for that one command; the docs say so.</p>
+<p><strong>Alternatives rejected.</strong></p>
+<ul>
+  <li><em><code>ContentRootPath</code>.</em> It is the project folder under <code>dotnet run</code> and <code>dotnet ef</code>, but it is the current directory when the built dll or apphost is run directly (verified). It fails the "whatever directory" criterion.</li>
+  <li><em><code>AppContext.BaseDirectory</code>.</em> It points at <code>bin/Debug/net10.0</code>, so the database would end up in build output.</li>
+  <li><em><code>IDesignTimeDbContextFactory</code>.</em> It only affects <code>dotnet ef</code>, which already uses the project folder. It would create a <em>second</em> resolution path that can drift from runtime. That is exactly the "dotnet ef uses the design-time path" risk.</li>
+</ul>
+<p>Do not add a design-time factory. If one is ever added, it must call <code>StarbaseDatabase.ResolveConnectionString</code>.</p>
+<p><strong>Trade-off.</strong> The absolute build-machine path is embedded in the assembly. This is low sensitivity (a developer folder path). It is noted for the security reviewer, and deployments must set an absolute path.</p>
+
+<h3>4c. Documentation location (decided)</h3>
+<p>Create <code>exercise1/api/README.md</code> with a "Database" section. Add one link line near the top of <code>exercise1/README.md</code>, under the title: <code>Developer setup (database, run, test): see [api/README.md](api/README.md).</code> Do not change the spec text.</p>
+<p><strong>Why Markdown here:</strong></p>
+<ul>
+  <li>CLAUDE.md explicitly allows "a <code>README.md</code> that GitHub renders", and also requires "a README with run/migrate/test instructions".</li>
+  <li>The audience is a developer browsing the repo or GitHub. GitHub renders a folder's <code>README.md</code> automatically, but shows a linked <code>.html</code> file as source.</li>
+  <li>The commands must be copy-pasteable in a terminal next to the code.</li>
+</ul>
+<p>An HTML page in <code>docs/</code> was rejected because it is unreadable from a README link on GitHub.</p>
+<p>Required content:</p>
+<ul>
+  <li>Prerequisites: .NET SDK per <code>global.json</code> (10.0.100, roll forward to the latest feature band), and <code>dotnet tool install --global dotnet-ef --version 10.0.13</code>.</li>
+  <li>File location: <code>exercise1/api/starbase.db</code>, gitignored, never committed.</li>
+  <li>Create or upgrade: <code>cd exercise1/api &amp;&amp; dotnet ef database update</code>, or from the repo root <code>dotnet ef database update --project exercise1/api</code>. Running it again is safe.</li>
+  <li>Reset: stop the API, delete <code>starbase.db</code>, <code>starbase.db-shm</code> and <code>starbase.db-wal</code>, then run <code>dotnet ef database update</code>.</li>
+  <li>Inspect: <code>dotnet ef migrations list</code>, <code>dotnet ef dbcontext info</code>, <code>dotnet ef migrations has-pending-model-changes</code>, and optionally <code>sqlite3 starbase.db ".schema"</code> if sqlite3 is installed.</li>
+  <li>Troubleshooting:
+    <ul>
+      <li>"no such table: Person" means the database was never migrated: run the update.</li>
+      <li>The <code>MakeCareerStartDateRequired: ... NULL CareerStartDate</code> error means a stale database: reset.</li>
+      <li>A 0-byte file is fine: run the update.</li>
+      <li>Override the location with <code>ConnectionStrings__StarbaseApiDatabase</code> (an absolute path is recommended outside development).</li>
+    </ul>
+  </li>
+  <li>Migrations are not applied at startup yet (task 004).</li>
+  <li>Tests: <code>dotnet test ../api.Tests</code>.</li>
+</ul>
+
+<h3>4d. Tests project (decided: created in this task)</h3>
+<p>The acceptance criteria require tests and none exist, so creating <code>exercise1/api.Tests</code> belongs in this task. Keep it minimal. Later tasks add WebApplicationFactory tests.</p>
+<ul>
+  <li><code>exercise1/api.Tests/StargateAPI.Tests.csproj</code>: <code>net10.0</code>, <code>Nullable</code> enabled, <code>ImplicitUsings</code> enabled, <code>IsPackable=false</code>, <code>TreatWarningsAsErrors=true</code> (the new code stays clean even though the API project does not, see <a href="#oos">section 11</a>), and <code>ProjectReference</code> to <code>../api/StargateAPI.csproj</code>. EF Core Sqlite comes in transitively.</li>
+  <li><strong>New packages (need user approval):</strong>
+    <ul>
+      <li><code>Microsoft.NET.Test.Sdk</code></li>
+      <li><code>xunit</code> (v2 line, 2.9.x)</li>
+      <li><code>xunit.runner.visualstudio</code> (3.x)</li>
+      <li><code>coverlet.collector</code> (6.x, required by the documented <code>--collect:"XPlat Code Coverage"</code>)</li>
+    </ul>
+    Pin the latest stable versions that restore on net10.0 at implementation time, and record them in the PR. No other packages: <code>Microsoft.AspNetCore.Mvc.Testing</code> is not needed for this task, and <code>Database.HasPendingModelChanges()</code> lives in EF Core Relational, so <code>Microsoft.EntityFrameworkCore.Design</code> is not needed either.</li>
+  <li>The API csproj needs <code>&lt;InternalsVisibleTo&gt;</code> only if the developer makes the helper internal. A public static class is fine and avoids it.</li>
+  <li>Database isolation: each test uses its own file <code>Path.Combine(Path.GetTempPath(), "stargate-tests", $"{Guid.NewGuid():N}.db")</code>. Use a file rather than in-memory because the SQLite rebuild toggles <code>PRAGMA foreign_keys</code> and EF opens and closes connections during migrations, so a file matches real behaviour. Disposal calls <code>SqliteConnection.ClearAllPools()</code> and then deletes the file and its <code>-shm</code>/<code>-wal</code> siblings. Never touch <code>exercise1/api/starbase.db</code>.</li>
+</ul>
+
+<h3>4e. Verdict</h3>
+<p><strong>Simple</strong>, single developer (api-dev). This is one platform (the API project and its EF migrations), with no endpoint, DTO or UI change, and sequential steps.</p>
+
+<h2 id="changes">5. Changes by platform</h2>
+<div class="table-wrap"><table>
+<tr><th>Platform</th><th>File</th><th>Change</th></tr>
+<tr><td>db</td><td><code>exercise1/api/Business/Migrations/&lt;ts&gt;_MakeCareerStartDateRequired.cs</code> (+ <code>.Designer.cs</code>)</td><td>New. Tool-generated, then <code>defaultValue</code> removed and the guard added (4a).</td></tr>
+<tr><td>db</td><td><code>exercise1/api/Business/Migrations/StargateContextModelSnapshot.cs</code></td><td>Regenerated by the tool only: <code>CareerStartDate</code> becomes <code>DateTime</code> and <code>ProductVersion</code> becomes <code>10.0.13</code>. Never hand-edited.</td></tr>
+<tr><td>db</td><td><code>20240122154939_InitialCreate*.cs</code></td><td><strong>Unchanged.</strong></td></tr>
+<tr><td>api</td><td><code>exercise1/api/Business/Data/StarbaseDatabase.cs</code></td><td>New resolver (4b).</td></tr>
+<tr><td>api</td><td><code>exercise1/api/Program.cs</code></td><td>Lines 13-14 call the resolver.</td></tr>
+<tr><td>api</td><td><code>exercise1/api/StargateAPI.csproj</code></td><td>Add the <code>AssemblyMetadata</code> item. No new packages in this project.</td></tr>
+<tr><td>api</td><td><code>exercise1/api/appsettings.json</code></td><td>Unchanged (<code>Data Source=starbase.db</code> stays relative; the code anchors it).</td></tr>
+<tr><td>api (tests)</td><td><code>exercise1/api.Tests/StargateAPI.Tests.csproj</code>, <code>MigrationTests.cs</code>, <code>StarbaseDatabaseTests.cs</code>, <code>TestDatabase.cs</code> (per-test file helper)</td><td>New (4d, 8).</td></tr>
+<tr><td>docs</td><td><code>exercise1/api/README.md</code> (new), <code>exercise1/README.md</code> (one link line)</td><td>4c.</td></tr>
+<tr><td>ui / infra</td><td>none</td><td>none</td></tr>
+</table></div>
+
+<h2 id="contracts">6. Contracts affected</h2>
+<ul>
+  <li><strong>HTTP:</strong> none. <code>PersonAstronaut.CareerStartDate</code> stays <code>DateTime?</code> in JSON (LEFT JOIN), and <code>ui/src/app/api/models.ts:12</code> (<code>string | null</code>) stays correct. <span class="tag ok">not breaking</span></li>
+  <li><strong>Schema:</strong> <code>AstronautDetail.CareerStartDate</code> goes from <code>TEXT NULL</code> to <code>TEXT NOT NULL</code>. The SQLite rebuild reorders the table's physical columns to <code>Id, CareerEndDate, CareerStartDate, CurrentDutyTitle, CurrentRank, PersonId</code>. A fresh database gets the same order (verified). The PK, FK <code>ON DELETE CASCADE</code> and unique <code>IX_AstronautDetail_PersonId</code> are preserved. <span class="tag warn">breaking for databases with NULL rows</span>: by design, they cannot migrate without a reset.</li>
+  <li><strong>Configuration:</strong> the key <code>ConnectionStrings:StarbaseApiDatabase</code> is unchanged, but a relative <code>Data Source</code> now means "relative to the API project folder" instead of "relative to the cwd". A missing directory now fails at startup. <span class="tag warn">behaviour change</span> List it in the README changelog.</li>
+</ul>
+
+<h2 id="rules">7. Domain rules</h2>
+<p>No rule logic changes. The rules touched:</p>
+<ul>
+  <li><strong>Rule 2</strong> (no astronaut rows for non-astronauts) is unaffected. Requiring <code>CareerStartDate</code> only applies to rows that exist. The DTO stays nullable for people without a detail row.</li>
+  <li><strong>Rule 3</strong> (exactly one current duty with a start date) is reinforced in the database: every <code>AstronautDetail</code> row now must carry a start date.</li>
+  <li><strong>Rules 4-7</strong> are unaffected. <code>CareerEndDate</code> stays nullable. The <code>RETIRED</code> handling is not touched.</li>
+  <li>"Rules must hold in the database": this task moves one invariant into a <code>NOT NULL</code> constraint, and does it without inventing data.</li>
+</ul>
+
+<h2 id="tests">8. Tests</h2>
+<p>Integration tests against a per-test SQLite file use <code>context.Database.GetService&lt;IMigrator&gt;()</code>. Raw SQL in tests is constant (no interpolation).</p>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Given / When / Then</th></tr>
+<tr><td>T1</td><td>Given a <code>StargateContext</code> on a fresh per-test DB, when I call <code>Database.HasPendingModelChanges()</code>, then it returns <code>false</code>.</td></tr>
+<tr><td>T2</td><td>Given no file, when I call <code>Database.Migrate()</code>, then the tables <code>Person</code>, <code>AstronautDetail</code> and <code>AstronautDuty</code> exist; <code>AstronautDetail.CareerStartDate</code> has <code>notnull = 1</code>; both FKs to <code>Person</code> have <code>on_delete = CASCADE</code>; <code>IX_AstronautDetail_PersonId</code> is unique; and the history lists <code>InitialCreate</code> and <code>MakeCareerStartDateRequired</code>.</td></tr>
+<tr><td>T3</td><td>Given a fully migrated DB, when I call <code>Migrate()</code> again, then no exception is thrown, the history count is unchanged and the row counts are unchanged.</td></tr>
+<tr><td>T4</td><td>Given a DB migrated to <code>InitialCreate</code> with a Person and an AstronautDetail whose <code>CareerStartDate</code> is set, when I migrate to latest, then the row is intact with the same <code>Id</code>, <code>PersonId</code> and date.</td></tr>
+<tr><td>T5 (failure)</td><td>Given a DB at <code>InitialCreate</code> with one AstronautDetail row with <code>CareerStartDate IS NULL</code>, when I migrate to latest, then a <code>SqliteException</code> is thrown whose message contains <code>NULL CareerStartDate</code> and <code>No data was changed</code>. Afterwards: the column is still nullable, the NULL row and the other rows are unchanged, the history has only <code>InitialCreate</code>, and no table named <code>ef_temp_%</code> or <code>__guard_%</code> exists.</td></tr>
+<tr><td>T6 (Down)</td><td>Given a fully migrated DB with a row, when I migrate to <code>20240122154939_InitialCreate</code>, then <code>CareerStartDate</code> is nullable, the row is preserved and the history has only <code>InitialCreate</code>. Then <code>Migrate()</code> to latest succeeds again.</td></tr>
+<tr><td>T7</td><td>When I call <code>ResolveConnectionString("Data Source=starbase.db", "/x/api")</code>, then Data Source is <code>/x/api/starbase.db</code> (use a temp dir that exists).</td></tr>
+<tr><td>T8</td><td>When the input is null, empty or whitespace, then the result equals resolving <code>DefaultConnectionString</code>.</td></tr>
+<tr><td>T9</td><td>When the Data Source is absolute, then it is returned unchanged. When it is <code>:memory:</code> or has <code>Mode=Memory</code>, then it is unchanged.</td></tr>
+<tr><td>T10</td><td>When the input has extra keywords (<code>Data Source=starbase.db;Cache=Shared</code>), then <code>Cache=Shared</code> is kept.</td></tr>
+<tr><td>T11 (hostile config)</td><td>When the Data Source is <code>../../nope/x.db</code> and the resolved directory does not exist, then <code>InvalidOperationException</code> is thrown naming the directory, and no file is created.</td></tr>
+<tr><td>T12</td><td><code>StarbaseDatabase.ProjectDirectory</code> equals the real API folder: walk up from <code>AppContext.BaseDirectory</code> to the directory containing <code>api/StargateAPI.csproj</code>, then compare <code>Path.GetFullPath</code> of the two.</td></tr>
+<tr><td>T13</td><td>No test opens <code>exercise1/api/starbase.db</code>. Assert that its existence and modification time are unchanged by the test run (or simply that every test DB path is under <code>Path.GetTempPath()</code>).</td></tr>
+</table></div>
+<p>Manual and QA checks (map to the acceptance criteria):</p>
+<ol>
+  <li>On a fresh clone without <code>starbase.db</code>, run <code>dotnet ef database update</code> from <code>exercise1/api</code>, and from the repo root with <code>--project exercise1/api</code>. Exactly one file is created, at <code>exercise1/api/starbase.db</code>.</li>
+  <li>Run it again: "already up to date".</li>
+  <li><code>dotnet run</code> from <code>exercise1/api</code>, and <code>dotnet run --project exercise1/api</code> from the repo root, then <code>GET /Person</code> returns 200.</li>
+  <li>The unverified items in section 10.</li>
+</ol>
+
+<h2 id="risks">9. Risks and rollout</h2>
+<ul>
+  <li><strong>Data impact.</strong> On a development database with NULL <code>CareerStartDate</code> rows, the migration refuses to run, by design. The remedy is to reset. There is no production database. Committed data: none (the <code>*.db</code> files are gitignored).</li>
+  <li><strong>Partial-failure window.</strong> The rebuild spans three transactions. A crash between (1) and (2) could leave <code>ef_temp_AstronautDetail</code> behind. This is very unlikely on a local file. The recovery is the documented reset.</li>
+  <li><strong>File not byte-identical after a failed run.</strong> EF's <code>__EFMigrationsLock</code> row is inserted and then deleted. The data is unchanged, which is what the acceptance criterion asks.</li>
+  <li><strong>The protect-files hook</strong> blocks editing the newly scaffolded migration (see the questions). Do not work around it by deleting and recreating the file.</li>
+  <li><strong>Embedded build path</strong> in the assembly metadata: low sensitivity. Deployments must set an absolute path, and they fail fast if they don't.</li>
+  <li><strong>Backward compatibility.</strong> No API change. A relative Data Source now anchors to the project folder. Anyone relying on a cwd-relative file (for example a <code>starbase.db</code> at the repo root) will see a different, empty database until they migrate. The README calls this out.</li>
+  <li><strong>Rollback.</strong> First run <code>dotnet ef database update 20240122154939_InitialCreate</code> (Down verified), then revert the commit. Alternatively, delete <code>starbase.db</code>.</li>
+  <li><strong>Downstream.</strong> Tasks 002 and 004 build on this clean chain. Their migrations must also be generated with <code>--namespace StargateAPI.Migrations</code>.</li>
+</ul>
+
+<h2 id="unverified">10. Unverified items (developer or QA must run these cheap checks)</h2>
+<div class="card warn">
+<ol>
+  <li><strong>Built dll from another folder after the change.</strong> Run <code>cd /tmp &amp;&amp; dotnet &lt;repo&gt;/exercise1/api/bin/Debug/net10.0/StargateAPI.dll --urls http://localhost:5399</code>, then <code>GET /Person</code>. Expect 200, no <code>/tmp/starbase.db</code>, and <code>exercise1/api/starbase.db</code> in use. The cause of today's 500 for this case (null connection string because <code>appsettings.json</code> is not under the content root) is inferred, not observed. The <code>DefaultConnectionString</code> fallback is designed to cover it.</li>
+  <li><strong>The <code>AssemblyMetadata</code> item is emitted and readable.</strong> Covered by T12. Also check with <code>dotnet build</code> followed by the test.</li>
+  <li><strong><code>dotnet ef</code> and <code>dotnet run</code> resolution was verified in a scratch copy</strong> outside the repo, with the same layout. Repeat items 1 and 3 of the manual checks in the real repo.</li>
+  <li><strong>The guard in a generated SQL script</strong> (<code>dotnet ef migrations script --idempotent</code>) run in the <code>sqlite3</code> CLI was not tested. Only <code>database update</code> and <code>Migrate()</code> were. Not required by the acceptance criteria. Note it in the README if it is not checked.</li>
+  <li><strong>IDE launches</strong> (Visual Studio, Rider): not tested. The resolver makes them independent of the cwd anyway.</li>
+  <li><strong>Test package versions</strong> restoring on net10.0 in the sandbox: not checked (no restore attempted). Confirm with <code>dotnet test ../api.Tests</code>.</li>
+</ol>
+</div>
+
+<h2 id="oos">11. Out of scope but found</h2>
+<div class="card bad">
+<ul>
+  <li><strong><code>dotnet build -warnaserror</code> already fails</strong> on 6 nullability warnings in code this task does not touch:
+    <ul>
+      <li><code>AstronautDuty.cs:22</code> and <code>AstronautDetail.cs:22</code> (CS8618 on <code>Person</code>)</li>
+      <li><code>GetAstronautDutiesByName.cs:47</code> (CS8618), <code>:32</code> (CS8601) and <code>:34</code> (CS8602)</li>
+      <li><code>CreateAstronautDuty.cs:60</code> (CS8602)</li>
+    </ul>
+    For this task, the build step uses plain <code>dotnet build</code>, and nobody may claim a <code>-warnaserror</code> pass. The new test project sets <code>TreatWarningsAsErrors</code> for its own code. Suggest a follow-up task.</li>
+  <li><code>Program.cs</code> uses <code>UseHttpsRedirection</code>, and the direct-dll run logged "Failed to determine the https port for redirect". This is harmless here.</li>
+  <li>The read queries use interpolated SQL (<code>GetPersonByName.cs:26</code>, <code>GetAstronautDutiesByName.cs:28,34</code>, <code>CreateAstronautDuty.cs:56,60,90</code>). This is a known SQL injection issue and is out of scope per the task.</li>
+  <li>The commented <code>SeedData</code> in <code>StargateContext.cs:118-163</code> belongs to task 004.</li>
+</ul>
+</div>
+
+<h2 id="questions">12. Questions for the user</h2>
+<ol>
+  <li><strong>Approve the new test dependencies?</strong> CLAUDE.md says to ask before adding dependencies. The packages are <code>Microsoft.NET.Test.Sdk</code>, <code>xunit</code> (2.9.x), <code>xunit.runner.visualstudio</code> (3.x) and <code>coverlet.collector</code> (6.x), in the new <code>exercise1/api.Tests</code> project only. Approving this plan approves them.</li>
+  <li><strong>Hook conflict.</strong> <code>.claude/hooks/protect-files.sh</code> blocks Edit/Write on any existing file under <code>Business/Migrations/</code>, including the migration this task scaffolds and must edit (remove the backfill, add the guard). Options:
+    <ul>
+      <li>(a) You narrow the hook to block only files tracked by git (for example, allow when <code>git ls-files --error-unmatch</code> fails).</li>
+      <li>(b) You permit a one-off edit.</li>
+    </ul>
+    The agents cannot change hooks or configuration themselves.</li>
+  <li><strong>Embedded build path.</strong> Are you OK with the API folder's absolute path being stored in the assembly metadata (all build configurations)? The alternative is to emit it only for Debug and require an absolute <code>Data Source</code> in Release.</li>
+</ol>
+
+</main>
+</body>
+</html>

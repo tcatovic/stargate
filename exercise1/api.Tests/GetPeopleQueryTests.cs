@@ -156,6 +156,15 @@ public class GetPeopleQueryTests
     }
 
     [Fact]
+    public async Task P12_NameAndDutyTitleAreTrimmed()
+    {
+        using var db = PeopleFixture.Create();
+
+        Assert.Equal(["Elena Vasquez"], Names(await Run(db, new GetPeople { Name = " elena " })));
+        Assert.Equal(["Desmond Achebe"], Names(await Run(db, new GetPeople { DutyTitle = "retired " })));
+    }
+
+    [Fact]
     public async Task P10_WhitespaceOnlyOrNullFilters_MeanNoFilter()
     {
         using var db = PeopleFixture.Create();

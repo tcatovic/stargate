@@ -26,7 +26,7 @@ On a clone without `starbase.db` this creates the file with the `Person`, `Astro
 
 ### Reset
 
-Stop the API, then:
+Development databases only; back up first for anything you care about (copy `starbase.db`). Stop the API, then:
 
 ```bash
 rm -f starbase.db starbase.db-shm starbase.db-wal
@@ -48,7 +48,7 @@ sqlite3 starbase.db ".schema"                    # optional, if sqlite3 is insta
 | --- | --- |
 | `no such table: Person` | The database was never migrated. Run `dotnet ef database update`. |
 | `starbase.db` is 0 bytes | Something opened it before it was migrated. Run `dotnet ef database update`. |
-| `MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate...` | A stale development database from before `CareerStartDate` became required. The migration changed nothing. Reset (above). |
+| `MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate...` | A database from before `CareerStartDate` became required. The migration changed nothing. Safest: back up the file, set `CareerStartDate` on those rows, then re-run the update. For a disposable development database only: reset (above). |
 | `Database directory '...' does not exist` or `...is relative and this build does not embed the API project folder` | Set an absolute path (below). |
 
 ### Using a different file

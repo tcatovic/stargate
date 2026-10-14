@@ -13,15 +13,16 @@ namespace StargateAPI.Migrations
         {
             // No backfill (task 003): abort, changing nothing, if any row lacks a CareerStartDate.
             // SQLite-specific and transitional (SQL Server replaces it later): SQLite has no RAISE
-            // outside triggers, so a temp trigger on a temp table raises the error. It runs in the
-            // same transaction as the table rebuild, so a failure rolls everything back.
+            // outside triggers, so a temp trigger on a temp table raises the error. It runs first,
+            // before EF's table rebuild (which commits around its PRAGMA foreign_keys statements),
+            // so nothing has been committed yet when it aborts.
             migrationBuilder.Sql(
                 """
                 CREATE TEMP TABLE "__guard_CareerStartDate" ("x" INTEGER);
                 CREATE TEMP TRIGGER "__guard_CareerStartDate_check" BEFORE INSERT ON "__guard_CareerStartDate"
                 WHEN EXISTS (SELECT 1 FROM main."AstronautDetail" WHERE "CareerStartDate" IS NULL)
                 BEGIN
-                    SELECT RAISE(ABORT, 'MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate. No data was changed. Delete starbase.db and run dotnet ef database update, or set CareerStartDate on those rows first.');
+                    SELECT RAISE(ABORT, 'MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate. No data was changed. Set CareerStartDate on those rows first (back up the database before changing data). Only for a disposable development database: delete starbase.db and run dotnet ef database update.');
                 END;
                 INSERT INTO "__guard_CareerStartDate" ("x") VALUES (1);
                 DROP TABLE "__guard_CareerStartDate";

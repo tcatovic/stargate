@@ -2,6 +2,9 @@
 using Microsoft.AspNetCore.Mvc;
 using StargateAPI.Business.Commands;
 using StargateAPI.Business.Queries;
+using StargateAPI.Business.Validation;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Net;
 
 namespace StargateAPI.Controllers
@@ -18,49 +21,53 @@ namespace StargateAPI.Controllers
         }
 
         [HttpGet("")]
-        public async Task<IActionResult> GetPeople()
+        [EndpointSummary("List people, optionally filtered by name, current rank and current duty title")]
+        [EndpointDescription("Filters combine with AND; an omitted, empty or whitespace-only filter does not filter. "
+            + "Values are trimmed. name is a case-insensitive contains match; rank and dutyTitle are case-insensitive exact "
+            + "matches on the current AstronautDetail values. People with no astronaut assignment are listed when no rank or "
+            + "dutyTitle filter is given and are never matched by one. Case-insensitivity folds ASCII letters only. "
+            + "Order is unspecified; no paging.")]
+        [ProducesResponseType(typeof(GetPeopleResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetPeople(
+            [FromQuery, StringLength(InputRules.MaxLength), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
+                Description("Case-insensitive contains match on the person's name. Empty or whitespace-only means no filter.")] string? name,
+            [FromQuery, StringLength(InputRules.MaxLength), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
+                Description("Case-insensitive exact match on the current rank (e.g. MAJ). Excludes people with no assignment.")] string? rank,
+            [FromQuery, StringLength(InputRules.MaxLength), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
+                Description("Case-insensitive exact match on the current duty title (e.g. Commander, RETIRED). Excludes people with no assignment.")] string? dutyTitle,
+            CancellationToken cancellationToken)
         {
-            try
+            var result = await _mediator.Send(new GetPeople()
             {
-                var result = await _mediator.Send(new GetPeople()
-                {
+                Name = name,
+                Rank = rank,
+                DutyTitle = dutyTitle
+            }, cancellationToken);
 
-                });
-
-                return this.GetResponse(result);
-            }
-            catch (Exception ex)
-            {
-                return this.GetResponse(new BaseResponse()
-                {
-                    Message = ex.Message,
-                    Success = false,
-                    ResponseCode = (int)HttpStatusCode.InternalServerError
-                });
-            }
+            return this.GetResponse(result);
         }
 
         [HttpGet("{name}")]
-        public async Task<IActionResult> GetPersonByName(string name)
+        [EndpointSummary("Get one person by exact name (case-insensitive)")]
+        [EndpointDescription("The route value is URL-decoded and trimmed, then matched exactly, ignoring ASCII case. "
+            + "% and _ have no wildcard meaning. An unknown name returns 404.")]
+        [ProducesResponseType(typeof(GetPersonByNameResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(GetPersonByNameResult), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> GetPersonByName(
+            [FromRoute, StringLength(InputRules.MaxLength, MinimumLength = 1), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
+                Description("The person's full name, URL-encoded (e.g. Mira%20Okafor, O%27Brien).")] string name,
+            CancellationToken cancellationToken)
         {
-            try
+            var result = await _mediator.Send(new GetPersonByName()
             {
-                var result = await _mediator.Send(new GetPersonByName()
-                {
-                    Name = name
-                });
+                Name = name
+            }, cancellationToken);
 
-                return this.GetResponse(result);
-            }
-            catch (Exception ex)
-            {
-                return this.GetResponse(new BaseResponse()
-                {
-                    Message = ex.Message,
-                    Success = false,
-                    ResponseCode = (int)HttpStatusCode.InternalServerError
-                });
-            }
+            return this.GetResponse(result);
         }
 
         [HttpPost("")]

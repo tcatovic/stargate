@@ -83,6 +83,21 @@ public class ResponseShapeTests
     }
 
     [Fact]
+    public async Task S1_NotFoundResult_FromTheRealHandler_HasTheDocumentedShape()
+    {
+        using var db = new TestDatabase();
+        db.Migrate();
+        using var context = db.CreateContext();
+
+        var result = await new GetPersonByNameHandler(context).Handle(new GetPersonByName { Name = "Nobody" }, CancellationToken.None);
+
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(result, Web));
+        var root = json.RootElement;
+        Assert.Equal(Expect(("person", JsonValueKind.Null), ("success", JsonValueKind.False), ("message", JsonValueKind.String), ("responseCode", JsonValueKind.Number)), Kinds(root));
+        Assert.Equal(404, root.GetProperty("responseCode").GetInt32());
+    }
+
+    [Fact]
     public void CreateAstronautDutyResult_HasTheDocumentedShape()
     {
         using var json = JsonDocument.Parse(JsonSerializer.Serialize(new CreateAstronautDutyResult { Id = 9 }, Web));

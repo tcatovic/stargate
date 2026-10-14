@@ -117,5 +117,7 @@ Tests use their own temporary SQLite files and never touch `starbase.db`. The au
 
 ## Changelog (breaking changes)
 
+- Task 001 (BREAKING): `GET /Person/{name}` now returns HTTP 404 (`success: false`, `message: "Person not found"`, `responseCode: 404`, `person: null`) for an unknown name instead of 200 with `person: null`. The lookup is exact and case-insensitive (ASCII). Invalid input (longer than 100 characters, or characters other than letters, digits, space, hyphen, apostrophe, period) now returns 400 `ValidationProblemDetails`; a blank path name is 400. Unhandled errors on these two actions are no longer returned as a 500 body containing the exception message.
+- Task 001 (not breaking): `GET /Person` accepts optional `name` (case-insensitive contains), `rank` and `dutyTitle` (case-insensitive exact, current values) query filters, combined with AND. People with no astronaut assignment are only excluded by a rank or dutyTitle filter. Case-insensitivity folds ASCII letters only. The response shape is unchanged.
 - Task 004 (not breaking): in Development, startup now migrates the database and seeds sample people when `Person` is empty. No API shape change.
 - Task 003: `AstronautDetail.CareerStartDate` is now `NOT NULL` in the database. Databases holding rows with a NULL value must be reset. A relative `Data Source` now means "relative to the API project folder" instead of the working directory; a `starbase.db` kept elsewhere is no longer picked up.

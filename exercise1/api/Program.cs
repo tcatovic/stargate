@@ -14,6 +14,8 @@ builder.Services.AddSwaggerGen();
 var connectionString = StarbaseDatabase.FromConfiguration(builder.Configuration);
 builder.Services.AddDbContext<StargateContext>(options => options.UseSqlite(connectionString));
 
+builder.Services.AddDevelopmentDatabaseInitializer();
+
 builder.Services.AddMediatR(cfg =>
 {
     cfg.AddRequestPreProcessor<CreateAstronautDutyPreProcessor>();
@@ -21,6 +23,11 @@ builder.Services.AddMediatR(cfg =>
 });
 
 var app = builder.Build();
+
+// Development only (the initializer checks the environment itself). Runs after Build() so design-time
+// `dotnet ef` commands, which stop at Build(), never trigger it, and before app.Run() so no request is
+// served against an unmigrated database. A failure is deliberately not caught: the app must not start.
+await DevelopmentDatabaseInitializer.RunAsync(app.Services);
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())

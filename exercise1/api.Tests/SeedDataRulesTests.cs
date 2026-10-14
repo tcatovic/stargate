@@ -66,7 +66,9 @@ public class SeedDataRulesTests : IDisposable
     [Fact]
     public void Detail_agrees_with_the_current_duty_and_the_first_duty_start()
     {
-        Assert.Equal(4, Count("SELECT COUNT(*) FROM AstronautDetail"));
+        var astronauts = Count("SELECT COUNT(DISTINCT PersonId) FROM AstronautDuty");
+        Assert.True(astronauts > 0);
+        Assert.Equal(astronauts, Count("SELECT COUNT(*) FROM AstronautDetail"));
         Assert.Equal(0, Count("SELECT COUNT(*) FROM AstronautDetail d WHERE NOT EXISTS (" +
                               "SELECT 1 FROM AstronautDuty u WHERE u.PersonId = d.PersonId AND u.DutyEndDate IS NULL " +
                               "AND u.Rank = d.CurrentRank AND u.DutyTitle = d.CurrentDutyTitle)"));
@@ -81,6 +83,20 @@ public class SeedDataRulesTests : IDisposable
                               "OR (DutyEndDate IS NOT NULL AND DutyEndDate NOT LIKE '% 00:00:00')"));
         Assert.Equal(0, Count("SELECT COUNT(*) FROM AstronautDetail WHERE CareerStartDate NOT LIKE '% 00:00:00' " +
                               "OR (CareerEndDate IS NOT NULL AND CareerEndDate NOT LIKE '% 00:00:00')"));
+    }
+
+    [Fact]
+    public void Dates_are_fixed_literals_not_relative_to_now()
+    {
+        Assert.Equal("2023-03-31 00:00:00", _db.Strings("SELECT CareerEndDate FROM AstronautDetail WHERE CurrentDutyTitle = 'RETIRED'").Single());
+        Assert.Equal("2023-04-01 00:00:00", _db.Strings("SELECT DutyStartDate FROM AstronautDuty WHERE DutyTitle = 'RETIRED'").Single());
+        Assert.Equal("2012-01-09 00:00:00", _db.Strings("SELECT CareerStartDate FROM AstronautDetail d JOIN Person p ON p.Id = d.PersonId WHERE p.Name = 'Elena Vasquez'").Single());
+        // Every seeded date lies in a fixed window that ends well before any plausible run date.
+        Assert.Equal(0, Count("SELECT COUNT(*) FROM (SELECT DutyStartDate AS d FROM AstronautDuty UNION ALL SELECT DutyEndDate FROM AstronautDuty " +
+                              "UNION ALL SELECT CareerStartDate FROM AstronautDetail UNION ALL SELECT CareerEndDate FROM AstronautDetail) " +
+                              "WHERE d IS NOT NULL AND (d < '2000-01-01' OR d > '2023-12-31')"));
+        var now = DateTime.UtcNow.AddYears(-1).ToString("yyyy-MM-dd");
+        Assert.Equal(0, Count($"SELECT COUNT(*) FROM AstronautDuty WHERE DutyStartDate > '{now}'"));
     }
 
     [Fact]

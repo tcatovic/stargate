@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using StargateAPI.Business.Data;
@@ -186,13 +187,13 @@ public class DevelopmentDatabaseInitializerTests
     }
 
     [Fact]
-    public async Task Migration_failure_stops_startup_and_seeds_nothing()
+    public async Task Migration_failure_stops_startup_and_seeds_nothing_even_with_no_people()
     {
         using var db = new TestDatabase();
         db.Migrate(TestDatabase.InitialCreate);
-        db.Execute("INSERT INTO \"Person\" (\"Id\", \"Name\") VALUES (1, 'Ada');");
-        db.Execute("INSERT INTO \"AstronautDetail\" (\"PersonId\", \"CurrentRank\", \"CurrentDutyTitle\", \"CareerStartDate\") " +
-                   "VALUES (1, 'CPT', 'Pilot', NULL);");
+        // No Person row: only a failed migration (not the "people exist" skip) can explain an unseeded database.
+        db.Execute("PRAGMA foreign_keys = OFF; INSERT INTO \"AstronautDetail\" (\"PersonId\", \"CurrentRank\", \"CurrentDutyTitle\", \"CareerStartDate\") " +
+                   "VALUES (99, 'CPT', 'Pilot', NULL);");
         var logger = new CapturingLogger<DevelopmentDatabaseInitializer>();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -201,14 +202,147 @@ public class DevelopmentDatabaseInitializerTests
         Assert.Contains("migration", ex.Message);
         Assert.Contains(Chain(ex), e => e.Message.Contains("NULL CareerStartDate"));
         Assert.Equal(new[] { TestDatabase.InitialCreate }, db.AppliedMigrations());
-        Assert.Equal(1, Count(db, "Person"));
+        Assert.Equal(0, Count(db, "Person"));
         Assert.Equal(1, Count(db, "AstronautDetail"));
         Assert.Equal(0, Count(db, "AstronautDuty"));
         Assert.Single(logger.Entries, e => e.Level == LogLevel.Critical);
     }
 
     [Fact]
-    public async Task Logs_state_clearly_what_happened_without_leaking_the_connection_string()
+    public async Task Leftover_detail_rows_without_people_fail_seeding_clearly_without_partial_writes()
+    {
+        using var db = new TestDatabase();
+        db.Migrate();
+        // An orphan detail for PersonId 3 collides with the unique PersonId index when the third person is seeded.
+        db.Execute("PRAGMA foreign_keys = OFF; INSERT INTO \"AstronautDetail\" (\"PersonId\", \"CurrentRank\", \"CurrentDutyTitle\", \"CareerStartDate\") " +
+                   "VALUES (3, 'CPT', 'Pilot', '2000-01-01 00:00:00');");
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => db.CreateInitializer(Development).InitializeAsync()).WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Contains("seeding", ex.Message);
+        Assert.Equal(0, Count(db, "Person"));
+        Assert.Equal(1, Count(db, "AstronautDetail"));
+        Assert.Equal(0, Count(db, "AstronautDuty"));
+    }
+
+    [Fact]
+    public async Task Emptiness_check_and_inserts_share_one_transaction()
+    {
+        using var db = new TestDatabase();
+        db.Migrate();
+        var intruder = new InsertPersonBeforeSave($"Data Source={db.Path};Default Timeout=1");
+        using var context = new StargateContext(new DbContextOptionsBuilder<StargateContext>()
+            .UseSqlite(db.ConnectionString).AddInterceptors(intruder).Options);
+        var initializer = new DevelopmentDatabaseInitializer(
+            context, new FakeHostEnvironment(Development),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<DevelopmentDatabaseInitializer>.Instance, true);
+
+        // Between the emptiness check and the inserts another writer tries to add a person. Inside one
+        // transaction the check's read lock is still held, so the writer cannot commit and times out.
+        // Without the transaction the writer wins and the seed lands on top of it.
+        await initializer.InitializeAsync();
+
+        Assert.True(intruder.Ran);
+        Assert.True(intruder.WasBlocked, "the concurrent writer committed between the check and the inserts");
+        Assert.Equal(6, Count(db, "Person"));
+        Assert.Equal(0, db.Scalar<long>("SELECT COUNT(*) FROM \"Person\" WHERE \"Name\" = 'Intruder'"));
+    }
+
+    private sealed class InsertPersonBeforeSave(string connectionString)
+        : Microsoft.EntityFrameworkCore.Diagnostics.SaveChangesInterceptor
+    {
+        public bool Ran { get; private set; }
+        public bool WasBlocked { get; private set; }
+
+        public override ValueTask<Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            Microsoft.EntityFrameworkCore.Diagnostics.InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            Ran = true;
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "INSERT INTO \"Person\" (\"Name\") VALUES ('Intruder')";
+            try
+            {
+                command.ExecuteNonQuery();
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 5)
+            {
+                WasBlocked = true;
+            }
+            return base.SavingChangesAsync(eventData, result, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task Development_in_a_non_debug_build_does_nothing()
+    {
+        using var db = new TestDatabase();
+        var logger = new CapturingLogger<DevelopmentDatabaseInitializer>();
+
+        var result = await db.CreateInitializer(Development, logger, isDebugBuild: false).InitializeAsync();
+
+        Assert.False(result.Ran);
+        Assert.Empty(result.AppliedMigrations);
+        Assert.False(result.Seeded);
+        Assert.False(File.Exists(db.Path));
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Information && e.Message.Contains("not a Debug build", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Development_in_a_non_debug_build_leaves_an_existing_database_untouched()
+    {
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.InitialCreate);
+
+        await db.CreateInitializer(Development, isDebugBuild: false).InitializeAsync();
+
+        Assert.Equal(new[] { TestDatabase.InitialCreate }, db.AppliedMigrations());
+        Assert.Equal(0, Count(db, "Person"));
+    }
+
+    [Fact]
+    public async Task Development_in_a_debug_build_runs()
+    {
+        using var db = new TestDatabase();
+
+        var result = await db.CreateInitializer(Development, isDebugBuild: true).InitializeAsync();
+
+        Assert.True(result.Ran);
+        Assert.True(result.Seeded);
+    }
+
+    [Fact]
+    public async Task The_registered_initializer_does_nothing_in_a_non_debug_build()
+    {
+        using var db = new TestDatabase();
+        var services = new ServiceCollection()
+            .AddLogging()
+            .AddSingleton<Microsoft.Extensions.Hosting.IHostEnvironment>(new FakeHostEnvironment(Development))
+            .AddDbContext<StargateContext>(o => o.UseSqlite(db.ConnectionString))
+            .AddDevelopmentDatabaseInitializer(isDebugBuild: false);
+        await using var provider = services.BuildServiceProvider();
+
+        await DevelopmentDatabaseInitializer.RunAsync(provider);
+
+        Assert.False(File.Exists(db.Path));
+    }
+
+    [Fact]
+    public void The_default_build_gate_matches_the_API_assembly_configuration()
+    {
+#if DEBUG
+        Assert.True(DevelopmentDatabaseInitializer.IsDebugBuild);
+#else
+        Assert.False(DevelopmentDatabaseInitializer.IsDebugBuild);
+#endif
+    }
+
+    [Fact]
+    public async Task Logs_state_clearly_what_happened()
     {
         using var db = new TestDatabase();
         var first = new CapturingLogger<DevelopmentDatabaseInitializer>();
@@ -226,9 +360,40 @@ public class DevelopmentDatabaseInitializerTests
         Assert.Contains(other.Entries, e => e.Message.Contains("not Development") && e.Message.Contains("Production"));
         foreach (var entry in first.Entries.Concat(second.Entries).Concat(other.Entries))
         {
-            Assert.DoesNotContain("Data Source=", entry.Message);
             Assert.NotEqual(LogLevel.Critical, entry.Level);
         }
+    }
+
+    [Fact]
+    public async Task Secrets_in_the_connection_string_never_reach_the_log()
+    {
+        // SQLite rejects a Password keyword without an encryption build, so the marker is a harmless keyword value
+        // that appears nowhere except in the connection string.
+        const string marker = "31337";
+        using var db = new TestDatabase();
+        var success = new CapturingLogger<DevelopmentDatabaseInitializer>();
+        var failure = new CapturingLogger<DevelopmentDatabaseInitializer>();
+
+        InvalidOperationException ex;
+        var connectionString = $"{db.ConnectionString};Command Timeout={marker}";
+        StargateContext Create() => new(new DbContextOptionsBuilder<StargateContext>().UseSqlite(connectionString).Options);
+        var env = new FakeHostEnvironment(Development);
+
+        await new DevelopmentDatabaseInitializer(Create(), env, success, true).InitializeAsync();
+        db.Execute("CREATE TRIGGER fail_seed BEFORE INSERT ON AstronautDuty BEGIN SELECT RAISE(ABORT, 'seed boom'); END;");
+        db.Execute("DELETE FROM \"Person\";");
+        ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => new DevelopmentDatabaseInitializer(Create(), env, failure, true).InitializeAsync());
+
+        Assert.NotEmpty(success.Entries);
+        Assert.NotEmpty(failure.Entries);
+        foreach (var entry in success.Entries.Concat(failure.Entries))
+        {
+            Assert.DoesNotContain(marker, entry.Message);
+            Assert.DoesNotContain(marker, entry.Exception?.ToString() ?? "");
+        }
+        Assert.DoesNotContain(marker, ex.ToString());
+        Assert.DoesNotContain("Command Timeout", ex.ToString());
     }
 
     [Fact]
@@ -255,7 +420,7 @@ public class DevelopmentDatabaseInitializerTests
             .AddLogging()
             .AddSingleton<Microsoft.Extensions.Hosting.IHostEnvironment>(new FakeHostEnvironment(Development))
             .AddDbContext<StargateContext>(o => o.UseSqlite(db.ConnectionString))
-            .AddDevelopmentDatabaseInitializer();
+            .AddDevelopmentDatabaseInitializer(isDebugBuild: true);
         await using var provider = services.BuildServiceProvider();
 
         await DevelopmentDatabaseInitializer.RunAsync(provider);
@@ -271,7 +436,7 @@ public class DevelopmentDatabaseInitializerTests
             .AddLogging()
             .AddSingleton<Microsoft.Extensions.Hosting.IHostEnvironment>(new FakeHostEnvironment("Production"))
             .AddDbContext<StargateContext>(o => o.UseSqlite(db.ConnectionString))
-            .AddDevelopmentDatabaseInitializer();
+            .AddDevelopmentDatabaseInitializer(isDebugBuild: true);
         await using var provider = services.BuildServiceProvider();
 
         await DevelopmentDatabaseInitializer.RunAsync(provider);
@@ -290,7 +455,7 @@ public class DevelopmentDatabaseInitializerTests
             .AddLogging()
             .AddSingleton<Microsoft.Extensions.Hosting.IHostEnvironment>(new FakeHostEnvironment(Development))
             .AddDbContext<StargateContext>(o => o.UseSqlite(db.ConnectionString))
-            .AddDevelopmentDatabaseInitializer();
+            .AddDevelopmentDatabaseInitializer(isDebugBuild: true);
         await using var provider = services.BuildServiceProvider();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => DevelopmentDatabaseInitializer.RunAsync(provider));

@@ -81,8 +81,8 @@ public sealed class TestDatabase : IDisposable
     public List<string> AppliedMigrations() =>
         Strings("SELECT \"MigrationId\" FROM \"__EFMigrationsHistory\" ORDER BY \"MigrationId\"");
 
-    public DevelopmentDatabaseInitializer CreateInitializer(string environmentName, ILogger<DevelopmentDatabaseInitializer>? logger = null) =>
-        new(CreateContext(), new FakeHostEnvironment(environmentName), logger ?? NullLogger<DevelopmentDatabaseInitializer>.Instance);
+    public DevelopmentDatabaseInitializer CreateInitializer(string environmentName, ILogger<DevelopmentDatabaseInitializer>? logger = null, bool isDebugBuild = true) =>
+        new(CreateContext(), new FakeHostEnvironment(environmentName), logger ?? NullLogger<DevelopmentDatabaseInitializer>.Instance, isDebugBuild);
 
     /// <summary>Every row of the three data tables, ordered by Id, as one string. Equal dumps mean identical data.</summary>
     public string Dump()

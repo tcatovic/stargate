@@ -9,20 +9,20 @@ ASP.NET Core Web API (`StargateAPI.csproj`, .NET 10) backed by SQLite. Run all c
 
 ## Database
 
-The database is the SQLite file `exercise1/api/starbase.db`. It is gitignored and never committed. In the **Development** environment the API creates and migrates it on startup and seeds sample data (see [Automatic setup in Development](#automatic-setup-in-development)). In any other environment it does neither, so run `dotnet ef database update` yourself before the first run.
+The database is the SQLite file `exercise1/api/starbase.db`. It is gitignored and never committed. In the **Development** environment of a **Debug build** the API creates and migrates it on startup and seeds sample data (see [Automatic setup in Development](#automatic-setup-in-development)). In any other environment, and in every Release build even if it is started as Development, it does neither, so run `dotnet ef database update` yourself before the first run.
 
 A relative `Data Source` is resolved against the API project folder, not the current directory. `dotnet ef`, `dotnet run` and the built `StargateAPI.dll` therefore all use the same file, whatever folder you start them from.
 
 ### Automatic setup in Development
 
-When `ASPNETCORE_ENVIRONMENT` is `Development` (all three `launchSettings.json` profiles, so `dotnet run` and the IDE), the API does this before it serves any request:
+When the build is a Debug build (`dotnet run`, `dotnet build` without `-c Release`) and `ASPNETCORE_ENVIRONMENT` is `Development` (all three `launchSettings.json` profiles, so `dotnet run` and the IDE), the API does this before it serves any request:
 
 1. Applies every pending migration. A missing or 0-byte `starbase.db` is created.
 2. If the `Person` table is empty, inserts the sample data below in a single transaction. If it already holds people, nothing is inserted; the seeder never merges or updates.
 
 The console says what happened: `Applied N migration(s)` or `no migrations applied`, then `Seeded 6 people, 4 astronaut details and 8 duties` or `Seeding skipped`. If migration or seeding fails, the app logs a Critical entry and exits with an error instead of starting. A failed seed is rolled back (nothing seeded) and the next start retries it. The schema stays migrated.
 
-Nothing of this runs in any other environment, and `dotnet ef` commands never trigger it. To start without it, run as Production: `dotnet run --no-launch-profile` (then use `dotnet ef database update` as below).
+Nothing of this runs in any other environment, and a Release build never does it, whatever the environment: it logs `This is not a Debug build; automatic migration and seeding skipped` and leaves the database alone (a deployed build must not auto-migrate or seed a real database by accident). `dotnet ef` commands never trigger it either. To start without it, run as Production: `dotnet run --no-launch-profile` (then use `dotnet ef database update` as below).
 
 | Person | Demonstrates |
 | --- | --- |
@@ -54,7 +54,7 @@ rm -f starbase.db starbase.db-shm starbase.db-wal
 dotnet run          # Development: migrates and reseeds
 ```
 
-Outside Development, or to only create the schema, run `dotnet ef database update` instead. To get the sample data into a database that already has people, reset it as above; this deletes everything in it.
+Outside Debug/Development, or to only create the schema, run `dotnet ef database update` instead. To get the sample data into a database that already has people, reset it as above; this deletes everything in it.
 
 ### Inspect
 
@@ -69,7 +69,7 @@ sqlite3 starbase.db ".schema"                    # optional, if sqlite3 is insta
 
 | Symptom | Cause and fix |
 | --- | --- |
-| `no such table: Person` | The database was never migrated (outside Development, or with `--no-launch-profile`). Run `dotnet ef database update`. |
+| `no such table: Person` | The database was never migrated (outside Debug/Development, or with `--no-launch-profile`). Run `dotnet ef database update`. |
 | `Development database initialization failed during migration` | Startup could not apply migrations; the inner exception says why (for example the `MakeCareerStartDateRequired` row below). Fix the cause and restart. Data was not changed by the failed step. |
 | `Development database initialization failed during seeding` | Nothing was seeded (rolled back), for example another process holds the file or a constraint was added that rejects the sample rows. Fix the cause and restart; seeding is retried while `Person` is empty. |
 | `starbase.db` is 0 bytes | Something opened it before it was migrated. Run `dotnet ef database update`. |

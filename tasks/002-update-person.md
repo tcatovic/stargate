@@ -1,7 +1,7 @@
 ---
 id: 002
 title: Add an endpoint to rename a person
-status: planned
+status: approved
 platforms: [api, db, ui]
 ---
 
@@ -20,6 +20,7 @@ A caller can rename an existing person through a RESTful endpoint, and the syste
 - **Name rule** (shared with 006): 1 to 100 characters after trimming; letters, digits, spaces, hyphen, apostrophe and period only. Define it once here so create and rename use the same validation.
 - No authentication in this task (tracked with the API-key work).
 - Person responses keep the current shape.
+- **Plan review answers:** (1) the migration **trims existing names** after the guard proves trimming creates no case-insensitive clash (this is the user-approved data change); (2) **the interim `POST /Person` behaviour is accepted** until task 006: a duplicate POST now fails at the database with a generic 500 and padded names still insert, with no stop-gap; (3) the **combining-mark limits are accepted** (a mark must follow a letter, at most 3 in a row). Also per the plan: names are NFC-normalised and trimmed, the invisible characters listed in the plan are rejected, the shared rule is hardened for task 001's read endpoints too (non-breaking for ASCII), and the `Name` column is `COLLATE NOCASE` with a unique index (ASCII-only folding, as accepted in 001).
 
 ## Acceptance criteria
 - [ ] `PUT /Person/{personId}` with `{ "name": "..." }` renames the person and returns 200 with the updated person.

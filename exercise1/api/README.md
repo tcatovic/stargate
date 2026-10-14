@@ -95,6 +95,10 @@ The API project folder is embedded in **Debug builds only**. A Release build wit
 dotnet run          # Swagger at /swagger in Development
 ```
 
+## Build
+
+Warnings are errors: `exercise1/Directory.Build.props` sets `TreatWarningsAsErrors` for every .NET project under `exercise1/` (including `api.Tests` and any future project), so a plain `dotnet build` fails on any new warning. Fix the code; do not add `NoWarn`, `#pragma warning disable` or `!`. The one exception is the NuGet audit codes NU1900-NU1904: they stay warnings because they come from an external advisory feed that changes without a commit (or is unreachable), and would otherwise break every branch the day an advisory is published. Enforce them in CI (for example `dotnet list package --vulnerable --include-transitive`). A newer SDK that adds analyzer warnings can also fail the build until they are fixed.
+
 ## Test
 
 ```bash

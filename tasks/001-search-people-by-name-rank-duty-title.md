@@ -1,7 +1,7 @@
 ---
 id: 001
 title: Filter people by name, rank and current duty title
-status: approved
+status: in-progress
 platforms: [api, ui]
 ---
 

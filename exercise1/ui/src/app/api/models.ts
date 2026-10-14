@@ -42,12 +42,29 @@ export interface PersonFilters {
   dutyTitle?: string;
 }
 
-/** Body of every HTTP 400 from GET /Person and GET /Person/{name}. */
+/** Body of every HTTP 400 from GET /Person, GET /Person/{name} and PUT /Person/{personId}. */
 export interface ValidationProblemDetails {
   type: string;
   title: string;
   status: number;
-  /** Keys are parameter names: 'name' | 'rank' | 'dutyTitle'. Messages are for display only. */
+  /** Keys identify the failing input; clients must not branch on them. Messages are for display only. */
   errors: Record<string, string[]>;
   traceId: string;
 }
+
+/** Body of PUT /Person/{personId}. The name is sent exactly as given; the server trims and NFC-normalises. */
+export interface UpdatePersonRequest {
+  name: string;
+}
+
+/** Body of PUT /Person/{personId} for 200, 404 and 409. `person` is non-null on 200, null on 404 and 409. */
+export interface UpdatePersonResult extends BaseResponse {
+  person: PersonAstronaut | null;
+}
+
+/** What StargateApi.updatePerson emits. Exactly one value, then completes. */
+export type UpdatePersonOutcome =
+  | { status: 'updated'; person: PersonAstronaut }
+  | { status: 'notFound' }
+  | { status: 'conflict' }
+  | { status: 'invalid'; errors: Record<string, string[]> };

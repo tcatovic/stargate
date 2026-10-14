@@ -21,6 +21,10 @@ The model and the migration chain agree, `CareerStartDate` is non-nullable in th
 - **No backfill.** If existing rows have a NULL `CareerStartDate`, the migration fails with a clear message and alters no data. The documented remedy for a stale development database is to delete `starbase.db` and re-run the migrations.
 - The database file lives at `exercise1/api/starbase.db`. The connection string is resolved against the API project's folder in code so `dotnet ef` and `dotnet run` always use the same file. An environment variable or configuration value may override it.
 - The API does not apply migrations automatically in this task (task 004 handles startup behaviour and seeding).
+- **Test packages approved** for the new `exercise1/api.Tests` project only: `Microsoft.NET.Test.Sdk`, `xunit` (2.9.x), `xunit.runner.visualstudio` (3.x), `coverlet.collector` (6.x). No other dependencies without asking.
+- **Database path in the build:** the API project's folder is embedded in **Debug builds only**; Release builds require an explicit full database path in configuration and fail loudly without one.
+- **The 6 nullability build errors are out of scope.** They are tracked as a separate task; this task is verified with plain `dotnet build`, never claiming a `-warnaserror` pass.
+- **SQLite is transitional.** The plan is to move both development and production to SQL Server later. Keep the SQLite-specific pieces (the NULL guard, the path helper) small and isolated so they are easy to delete.
 
 ## Acceptance criteria
 - [ ] A new migration makes `AstronautDetail.CareerStartDate` non-nullable and brings the snapshot in line with the entities. `InitialCreate` and its Designer file are not edited.

@@ -111,6 +111,23 @@ public class InputRulesTests
     [InlineData("Ada\u200B")]
     public void R13_InvisibleCodePointsAreInvalid(string value) => Assert.False(IsValidName(value));
 
+    [Fact]
+    public void R13c_EveryCodePointOfTheInvisibleSetIsRejectedInsideAName()
+    {
+        // Written as numbers, independent of the pattern: 034F, 115F, 1160, 17B4, 17B5, 180B-180F, 3164, FE00-FE0F, FFA0.
+        var invisible = new List<int> { 0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x3164, 0xFFA0 };
+        invisible.AddRange(Enumerable.Range(0x180B, 5));
+        invisible.AddRange(Enumerable.Range(0xFE00, 16));
+
+        Assert.Equal(28, invisible.Count);
+        foreach (var codePoint in invisible)
+        {
+            var name = "Ad" + (char)codePoint + "a";
+            Assert.False(IsValidName(name), $"U+{codePoint:X4} must be rejected");
+        }
+        Assert.True(IsValidName("Ada"));
+    }
+
     [Theory]
     [InlineData("\u3164A")]
     [InlineData("A\u3164")]

@@ -16,7 +16,7 @@ namespace StargateAPI.Business.Validation
         // Default-ignorable code points that Unicode classes as letters (Lo) or nonspacing marks (Mn): they render as
         // nothing, so two visually identical names could differ. U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B-U+180F,
         // U+3164, U+FE00-U+FE0F, U+FFA0. Written as regex escapes so the source stays readable and reviewable.
-        private const string Invisible = @"͏ᅟᅠ឴឵᠋-᠏ㅤ︀-️ﾠ";
+        private const string Invisible = @"\u034F\u115F\u1160\u17B4\u17B5\u180B-\u180F\u3164\uFE00-\uFE0F\uFFA0";
 
         // A letter followed by up to 3 combining marks, or one of the ASCII characters. \z (not $) so that a trailing
         // newline can never match, even for code that calls Regex.IsMatch directly.

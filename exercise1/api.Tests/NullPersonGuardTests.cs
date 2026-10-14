@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Http;
 using MediatR;
 using StargateAPI.Business.Commands;
 using StargateAPI.Business.Data;
@@ -6,8 +7,11 @@ using StargateAPI.Business.Queries;
 namespace StargateAPI.Tests;
 
 /// <summary>
-/// The handlers are called directly on purpose: the guards protect paths that no HTTP request reaches today
-/// (the pre-processor rejects unknown names first), so this is the only way to exercise them.
+/// The handlers are called directly on purpose: the guards protect paths that no HTTP request reaches today.
+/// CreateAstronautDutyHandler is shielded by CreateAstronautDutyPreProcessor, which rejects unknown names with 400 first.
+/// GetAstronautDutiesByNameHandler is unreachable because AstronautDutyController (GET) sends GetPersonByName instead.
+/// Whoever wires the controller to GetAstronautDutiesByName must add a 404 (or a pre-processor) at that point:
+/// this handler's guard returns 200 with a null person, which is not a correct answer for an unknown name.
 /// </summary>
 public class NullPersonGuardTests
 {
@@ -64,6 +68,8 @@ public class NullPersonGuardTests
             .Handle(new GetAstronautDutiesByName { Name = "Elena Vasquez" }, CancellationToken.None);
 
         Assert.Equal(200, result.ResponseCode);
+        Assert.True(result.Success);
+        Assert.Equal("Successful", result.Message);
         Assert.NotNull(result.Person);
         Assert.Equal("Elena Vasquez", result.Person.Name);
         Assert.Equal(["Commander", "Flight Engineer"], result.AstronautDuties.Select(d => d.DutyTitle).ToArray());
@@ -106,5 +112,56 @@ public class NullPersonGuardTests
         Assert.NotNull(result.Id);
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM \"AstronautDuty\" WHERE \"DutyTitle\" = 'Pilot' AND \"PersonId\" = (SELECT \"Id\" FROM \"Person\" WHERE \"Name\" = 'Kenji Watanabe')"));
         Assert.Equal("Pilot", db.Strings("SELECT \"CurrentDutyTitle\" FROM \"AstronautDetail\"").Single());
+    }
+
+    [Fact]
+    public async Task GetDuties_PersonWithoutAstronautDetail_CharacterisesCurrentOutput()
+    {
+        using var db = CreateMigratedDatabase();
+        SeedPerson(db, "Mira Okafor");
+        using var context = db.CreateContext();
+
+        var result = await new GetAstronautDutiesByNameHandler(context)
+            .Handle(new GetAstronautDutiesByName { Name = "Mira Okafor" }, CancellationToken.None);
+
+        // Today's behaviour (not a rule): the LEFT JOIN yields nulls, so the strings keep their "" defaults and the dates are null.
+        Assert.NotNull(result.Person);
+        Assert.Equal("Mira Okafor", result.Person.Name);
+        Assert.Equal("", result.Person.CurrentRank);
+        Assert.Equal("", result.Person.CurrentDutyTitle);
+        Assert.Null(result.Person.CareerStartDate);
+        Assert.Null(result.Person.CareerEndDate);
+        Assert.Empty(result.AstronautDuties);
+        Assert.Equal(200, result.ResponseCode);
+    }
+
+    [Fact]
+    public async Task PreProcessor_UnknownPerson_ThrowsBadRequestAndWritesNothing()
+    {
+        using var db = CreateMigratedDatabase();
+        SeedPerson(db, "Mira Okafor");
+        var before = db.Dump();
+        using var context = db.CreateContext();
+
+        await Assert.ThrowsAsync<BadHttpRequestException>(() => new CreateAstronautDutyPreProcessor(context).Process(
+            new CreateAstronautDuty { Name = "Nobody", Rank = "CPT", DutyTitle = "Pilot", DutyStartDate = new DateTime(2024, 1, 1) },
+            CancellationToken.None));
+
+        Assert.Equal(before, db.Dump());
+    }
+
+    [Fact]
+    public async Task PreProcessor_KnownPerson_DoesNotThrowAndWritesNothing()
+    {
+        using var db = CreateMigratedDatabase();
+        SeedPerson(db, "Mira Okafor");
+        var before = db.Dump();
+        using var context = db.CreateContext();
+
+        await new CreateAstronautDutyPreProcessor(context).Process(
+            new CreateAstronautDuty { Name = "Mira Okafor", Rank = "CPT", DutyTitle = "Pilot", DutyStartDate = new DateTime(2024, 1, 1) },
+            CancellationToken.None);
+
+        Assert.Equal(before, db.Dump());
     }
 }

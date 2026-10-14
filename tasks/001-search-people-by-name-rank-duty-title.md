@@ -1,7 +1,7 @@
 ---
 id: 001
 title: Filter people by name, rank and current duty title
-status: planned
+status: approved
 platforms: [api, ui]
 ---
 
@@ -27,6 +27,7 @@ A caller can retrieve all people, narrow the list by name, current rank and curr
 - Person responses keep the current shape (no duties included).
 - `POST /Person` is not changed here.
 - No authentication in this task (tracked with the API-key work).
+- **Plan review answers:** (1) keep the input rule, so the literal string `x' OR '1'='1` returns 400 over HTTP (the `=` fails the character rule before any SQL runs); handler-level tests still show 404 / empty list for it, and apostrophe strings that pass the rule (`O'Brien`, `x' OR 'a' LIKE 'a`) prove the SQL is safe over HTTP. (2) **`Microsoft.AspNetCore.Mvc.Testing` is approved** for the test project only (test-only; version matching the .NET 10 runtime, 10.0.x), so HTTP-level tests cover the 400/404 responses, URL decoding and Swagger. (3) **ASCII-only case-insensitivity is accepted** (`élena` does not match `Élena`), documented and pinned by a test.
 
 ## Acceptance criteria
 - [ ] `GET /Person` with no query string returns every person with the existing response shape (`people[]` of `personId, name, currentRank, currentDutyTitle, careerStartDate, careerEndDate`).

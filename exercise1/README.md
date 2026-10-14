@@ -1,6 +1,8 @@
 ﻿<!--v004-->
 # Stargate
 
+Developer setup (database, run, test): see [api/README.md](api/README.md).
+
 ***
 
 ## Astronaut Career Tracking System (ACTS)

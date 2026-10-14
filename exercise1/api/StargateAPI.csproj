@@ -7,6 +7,11 @@
     <TypeScriptModuleKind>none</TypeScriptModuleKind>
   </PropertyGroup>
 
+  <!-- Debug only: Release builds must be given an absolute database path (see README). -->
+  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+    <AssemblyMetadata Include="StargateApiProjectDirectory" Value="$(MSBuildProjectDirectory)" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.35" />
     <PackageReference Include="MediatR" Version="12.2.0" />

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QA 003 - CareerStartDate non-nullable migration</title>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mut:#555;--bd:#ccc;--ok:#0a7a2f;--bad:#b00020;--warn:#9a6700;--code:#f3f3f3}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e6e6e6;--mut:#a0a0a0;--bd:#3a3d44;--ok:#4cd07d;--bad:#ff6b81;--warn:#e3b341;--code:#22252b}}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;max-width:1000px;margin:0 auto;padding:1rem}
+table{border-collapse:collapse;width:100%;display:block;overflow-x:auto}
+th,td{border:1px solid var(--bd);padding:.4rem .6rem;text-align:left;vertical-align:top}
+code,pre{background:var(--code);border-radius:4px;font-size:.88em}code{padding:0 .2em}pre{padding:.6rem;overflow-x:auto}
+.pass{color:var(--ok);font-weight:700}.fail{color:var(--bad);font-weight:700}.nt{color:var(--warn);font-weight:700}
+.verdict{font-size:1.4rem;border:2px solid var(--ok);padding:.6rem 1rem;border-radius:8px}
+</style></head><body>
+<h1>QA report: task 003, CareerStartDate non-nullable migration</h1>
+<p>Branch <code>task/003-career-start-date-non-nullable-migration</code>, HEAD <code>c28f1cd</code>. Tested 2026-10-14 on Linux, .NET SDK 10.0.402, dotnet-ef 10.0.13. No browser or UI involved (task has no UI change).</p>
+<p class="verdict">Verdict: <span class="pass">PASS</span> (every acceptance criterion observed passing; no failures; 3 documentation or robustness observations below, none blocking)</p>
+
+<h2>Method</h2>
+<p>All tests ran against scratch copies made with <code>git archive HEAD</code> under <code>$CLAUDE_JOB_DIR/tmp</code> (c1 to c4), with scratch databases only. The API ran on <code>http://localhost:5204</code>, Development, <code>--no-launch-profile</code>, and every process was stopped afterwards. SQLite was inspected with Python's <code>sqlite3</code> module because the <code>sqlite3</code> CLI is not installed. Release was built to a scratch output from a scratch copy.</p>
+
+<h2>Criteria to cases</h2>
+<table>
+<tr><th>Acceptance criterion</th><th>Case</th><th>Result</th><th>Observed evidence</th></tr>
+<tr><td>New migration makes CareerStartDate NOT NULL; InitialCreate untouched</td><td>1</td><td class="pass">pass</td><td><code>PRAGMA table_info(AstronautDetail)</code> after update: <code>('CareerStartDate','TEXT',1)</code> (notnull=1). Migration <code>20261014212120_MakeCareerStartDateRequired</code> present. After <code>Down</code>: notnull=0 again.</td></tr>
+<tr><td>has-pending-model-changes reports none</td><td>7</td><td class="pass">pass</td><td><code>dotnet ef migrations has-pending-model-changes</code>: "No changes have been made to the model since the last migration."</td></tr>
+<tr><td>NULL row: fails with clear message, data unchanged</td><td>5</td><td class="pass">pass</td><td>DB at InitialCreate with AstronautDetail row (CareerStartDate NULL) plus a second row with a date. <code>dotnet ef database update</code> exit code 1. Message: "SQLite Error 19: 'MakeCareerStartDateRequired: AstronautDetail has rows with NULL CareerStartDate. No data was changed. Set CareerStartDate on those rows first (back up the database before changing data). Only for a disposable development database: delete starbase.db and run dotnet ef database update.'" Schema, rows and history dumps byte-identical before and after (<code>cmp</code>); history still only InitialCreate. Safe option leads; deletion advice is development-only. Note: the message comes after a long stack trace (see observation 3).</td></tr>
+<tr><td>Applies to InitialCreate schema with and without rows; working Down</td><td>4, 4b, 6</td><td class="pass">pass</td><td>4: InitialCreate DB with 2 Person, 1 AstronautDetail (date 2020-01-01), 1 AstronautDuty; update to latest: all rows survive, column NOT NULL, <code>foreign_key_check</code> empty. 4b: empty InitialCreate DB updates fine. 6: <code>database update InitialCreate</code> reverts (history back to 1 entry, column nullable, rows kept, unique index <code>IX_AstronautDetail_PersonId</code> kept); re-apply works and restores NOT NULL.</td></tr>
+<tr><td>Fresh clone, <code>dotnet ef database update</code> creates tables and constraints</td><td>1, 2</td><td class="pass">pass</td><td>No db file; ran from api folder, from repo root with <code>--project exercise1/api</code>, and from <code>/tmp/q3</code> with absolute <code>--project</code>. Each created <code>exercise1/api/starbase.db</code> (45056 bytes); CWD had no db file (root listing and /tmp/q3 empty). Tables Person, AstronautDetail, AstronautDuty; PKs; FKs <code>ON DELETE CASCADE</code> on both child tables; unique index on AstronautDetail.PersonId; history lists both migrations. Case 2: a 0-byte starbase.db became a full schema (45056 bytes).</td></tr>
+<tr><td>Repeatable</td><td>3</td><td class="pass">pass</td><td>Rerun on up-to-date DB with data: "No migrations were applied. The database is already up to date." Full dump identical before and after.</td></tr>
+<tr><td>dotnet ef and dotnet run use the same file, any CWD; no stray file</td><td>8, 10</td><td class="pass">pass</td><td>On a migrated copy with Person "Zed": <code>dotnet run --project exercise1/api</code> from root, <code>dotnet run</code> from api folder, built dll from /tmp/q8, and <code>dotnet run --project</code> from /tmp/q8 all returned HTTP 200 with Zed. No <code>*.db</code> in the root, in /tmp/q8, or elsewhere; only <code>exercise1/api/starbase.db</code>. <code>dotnet ef dbcontext info</code> data source: the api-folder path.</td></tr>
+<tr><td>Release requires absolute path</td><td>9</td><td class="pass">pass</td><td>Release build run from /tmp/q8 with no override: aborts (exit 134) with "The database path 'starbase.db' is relative and this build does not embed the API project folder. Set ConnectionStrings__StarbaseApiDatabase to an absolute path." Relative override <code>foo.db</code> also refused. With <code>ConnectionStrings__StarbaseApiDatabase=Data Source=&lt;abs&gt;</code>: GET /Person 200. No stray db. No Release dirs in the real repo (checked).</td></tr>
+<tr><td>Override honoured (supporting)</td><td>10</td><td class="pass">pass</td><td>Debug dll with absolute env override to a scratch DB containing an extra row "OverrideOnly": that row returned (also via <code>--ConnectionStrings:StarbaseApiDatabase=...</code>); without override it is not returned. A relative override <code>other.db</code> was anchored to the api folder (<code>exercise1/api/other.db</code> used, nothing in CWD).</td></tr>
+<tr><td>Docs: prerequisites, create/reset/inspect, location, recovery; reachable from exercise1/README.md</td><td>11</td><td class="pass">pass (with observations)</td><td><code>exercise1/README.md</code> line 4 links <code>api/README.md</code>; target exists and is tracked. Create, rerun, 0-byte, Reset (rm then update), and Inspect commands (<code>migrations list</code>, <code>dbcontext info</code>, <code>has-pending-model-changes</code>) all worked as written. "No migrations were applied" and the NULL-guard text quoted in the troubleshooting table match actual output. Observations 1 and 2 below.</td></tr>
+<tr><td>Tests use own per-test DB; check no pending changes and connection-string resolution</td><td>12</td><td class="pass">pass</td><td><code>dotnet test ../api.Tests --collect:"XPlat Code Coverage"</code> (Debug, scratch copy): Passed 23, Failed 0. <code>starbase.db</code> mtime and size unchanged by the run. Test files <code>MigrationTests.cs</code> and <code>StarbaseDatabaseTests.cs</code> exist (contents not mutation-tested).</td></tr>
+<tr><td>Repo hygiene</td><td>-</td><td class="pass">pass</td><td><code>git ls-files | grep '\.db$'</code> empty. <code>git status</code>: no tracked changes (only untracked task files from other tasks). Real <code>exercise1/api/starbase.db</code> remains 0 bytes. No API process left running.</td></tr>
+</table>
+
+<h2>Failures</h2>
+<p>None.</p>
+
+<h2>Observations (not failures against the criteria)</h2>
+<ol>
+<li><strong>Doc gap on a truly fresh clone: no restore step.</strong> Repro: fresh <code>git archive</code> copy (no obj folder), <code>cd exercise1/api; dotnet ef database update</code>. Observed: <code>error NETSDK1004: Assets file '.../obj/project.assets.json' not found. Run a NuGet package restore</code> and "Unable to retrieve project metadata", exit shown as an error, no db created. Running <code>dotnet restore</code> (or <code>dotnet build</code>) first fixes it. The README's Create command therefore does not work literally on a never-built clone. Suggest adding <code>dotnet restore</code> (or <code>dotnet build</code>) to the procedure. In the real working tree obj already existed, so this is only visible from a clean checkout.</li>
+<li><strong>Troubleshooting row is only partly true.</strong> README says an absolute-path problem produces "Database directory '...' does not exist". That check only runs for relative paths. An absolute override to a missing directory (Release, <code>Data Source=/nonexistent/x.db</code>) starts the app and fails on first request: HTTP 500 "SQLite Error 14: 'unable to open database file'". No acceptance criterion covers this.</li>
+<li><strong>NULL-guard message is buried.</strong> <code>dotnet ef database update</code> prints a full .NET stack trace (about 20 lines) before the final "SQLite Error 19: 'MakeCareerStartDateRequired: ...'" line. The message is clear and last, so it is usable; <code>dotnet ef</code> shows stack traces unless run with default verbosity changes. Cosmetic.</li>
+<li>Also seen: <code>dotnet ef database update</code> logs every SQL command at info level (very noisy). Un-migrated or 0-byte DB makes GET /Person return HTTP 500 "no such table: Person", as the README troubleshooting row describes.</li>
+</ol>
+
+<h2>Not tested</h2>
+<ul>
+<li>UI and browser: not applicable, no UI change.</li>
+<li>The README's <code>sqlite3 starbase.db ".schema"</code> line: the sqlite3 CLI is not installed here (it is marked optional). Python's sqlite3 module was used instead.</li>
+<li>The README claim that <code>dotnet ef migrations script</code> output is unverified in the sqlite3 CLI: not run, as the README says to avoid it.</li>
+<li>Windows paths (drive-relative <code>C:x.db</code> handling), SQL Server: out of scope or not available.</li>
+<li>Mutation testing of the unit tests (whether they fail if the migration or path is broken): not done; they were only run and passed.</li>
+<li>The README's global tool install command (<code>dotnet tool install --global dotnet-ef --version 10.0.13</code>) was not executed; dotnet-ef 10.0.13 was already installed.</li>
+<li><code>dotnet test</code> was run in a scratch copy, not in the real working tree, to avoid creating build output there.</li>
+</ul>
+</body></html>

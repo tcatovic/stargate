@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Logging;
@@ -16,6 +17,7 @@ namespace StargateAPI.Tests;
 public sealed class TestDatabase : IDisposable
 {
     public const string InitialCreate = "20240122154939_InitialCreate";
+    public const string MakeCareerStartDateRequired = "20261014212120_MakeCareerStartDateRequired";
 
     public string Path { get; } = System.IO.Path.Combine(
         System.IO.Path.GetTempPath(), "stargate-tests", $"{Guid.NewGuid():N}.db");
@@ -29,6 +31,20 @@ public sealed class TestDatabase : IDisposable
 
     public StargateContext CreateContext() =>
         new(new DbContextOptionsBuilder<StargateContext>().UseSqlite(ConnectionString).Options);
+
+    public StargateContext CreateContext(params IInterceptor[] interceptors) =>
+        new(new DbContextOptionsBuilder<StargateContext>().UseSqlite(ConnectionString).AddInterceptors(interceptors).Options);
+
+    /// <summary>Every migration in the assembly, in order. Generalises "exactly two migrations" assumptions.</summary>
+    public static IReadOnlyList<string> AllMigrations
+    {
+        get
+        {
+            using var context = new StargateContext(
+                new DbContextOptionsBuilder<StargateContext>().UseSqlite("Data Source=:memory:").Options);
+            return context.Database.GetMigrations().ToList();
+        }
+    }
 
     public static string LatestMigration
     {
@@ -85,11 +101,14 @@ public sealed class TestDatabase : IDisposable
         new(CreateContext(), new FakeHostEnvironment(environmentName), logger ?? NullLogger<DevelopmentDatabaseInitializer>.Instance, isDebugBuild);
 
     /// <summary>Every row of the three data tables, ordered by Id, as one string. Equal dumps mean identical data.</summary>
-    public string Dump()
+    public string Dump() => Dump("Person", "AstronautDetail", "AstronautDuty");
+
+    /// <summary>Like <see cref="Dump()"/> for the named tables only.</summary>
+    public string Dump(params string[] tables)
     {
         using var connection = Open();
         var text = new System.Text.StringBuilder();
-        foreach (var table in new[] { "Person", "AstronautDetail", "AstronautDuty" })
+        foreach (var table in tables)
         {
             using var command = connection.CreateCommand();
             command.CommandText = $"SELECT * FROM \"{table}\" ORDER BY \"Id\"";
@@ -106,6 +125,13 @@ public sealed class TestDatabase : IDisposable
         }
         return text.ToString();
     }
+
+    /// <summary>The collation the unique index uses for Person.Name, or null when there is no IX_Person_Name.</summary>
+    public string? PersonNameCollation() =>
+        Scalar<string?>("SELECT coll FROM pragma_index_xinfo('IX_Person_Name') WHERE name = 'Name'");
+
+    public bool HasUniquePersonNameIndex() =>
+        Scalar<long>("SELECT COUNT(*) FROM pragma_index_list('Person') WHERE name = 'IX_Person_Name' AND \"unique\" = 1") == 1;
 
     public bool CareerStartDateIsNotNull() =>
         Scalar<long>("SELECT \"notnull\" FROM pragma_table_info('AstronautDetail') WHERE name = 'CareerStartDate'") == 1;

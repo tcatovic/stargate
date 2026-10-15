@@ -2,7 +2,14 @@ import { HttpErrorResponse, provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 
-import { GetPeopleResult, GetPersonByNameResult, PersonAstronaut, ValidationProblemDetails } from './models';
+import {
+  GetPeopleResult,
+  GetPersonByNameResult,
+  PersonAstronaut,
+  UpdatePersonOutcome,
+  UpdatePersonResult,
+  ValidationProblemDetails,
+} from './models';
 import { StargateApi } from './stargate-api';
 
 const mira: PersonAstronaut = {
@@ -34,7 +41,9 @@ describe('StargateApi', () => {
   let http: HttpTestingController;
 
   beforeEach(() => {
-    TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
     api = TestBed.inject(StargateApi);
     http = TestBed.inject(HttpTestingController);
   });
@@ -94,7 +103,9 @@ describe('StargateApi', () => {
     it('U15 propagates a 400 as HttpErrorResponse', () => {
       let error: unknown;
       api.listPeople({ name: '%' }).subscribe({ error: (e: unknown) => (error = e) });
-      http.expectOne('/api/Person?name=%25').flush(problem('name'), { status: 400, statusText: 'Bad Request' });
+      http
+        .expectOne('/api/Person?name=%25')
+        .flush(problem('name'), { status: 400, statusText: 'Bad Request' });
       expect(error).toBeInstanceOf(HttpErrorResponse);
       expect((error as HttpErrorResponse).status).toBe(400);
     });
@@ -104,7 +115,12 @@ describe('StargateApi', () => {
     it('U8 returns the person on 200', () => {
       let person: PersonAstronaut | null | undefined;
       api.getPerson('Mira Okafor').subscribe((p) => (person = p));
-      const body: GetPersonByNameResult = { success: true, message: 'Successful', responseCode: 200, person: mira };
+      const body: GetPersonByNameResult = {
+        success: true,
+        message: 'Successful',
+        responseCode: 200,
+        person: mira,
+      };
       http.expectOne('/api/Person/Mira%20Okafor').flush(body);
       expect(person).toEqual(mira);
     });
@@ -145,7 +161,9 @@ describe('StargateApi', () => {
     it('U11 propagates a 500', () => {
       let error: unknown;
       api.getPerson('Mira Okafor').subscribe({ error: (e: unknown) => (error = e) });
-      http.expectOne('/api/Person/Mira%20Okafor').flush('boom', { status: 500, statusText: 'Server Error' });
+      http
+        .expectOne('/api/Person/Mira%20Okafor')
+        .flush('boom', { status: 500, statusText: 'Server Error' });
       expect(error).toBeInstanceOf(HttpErrorResponse);
       expect((error as HttpErrorResponse).status).toBe(500);
     });
@@ -160,12 +178,16 @@ describe('StargateApi', () => {
 
     it('U12 encodes reserved characters in the path', () => {
       api.getPerson('a/b?c#d').subscribe();
-      http.expectOne('/api/Person/a%2Fb%3Fc%23d').flush({}, { status: 404, statusText: 'Not Found' });
+      http
+        .expectOne('/api/Person/a%2Fb%3Fc%23d')
+        .flush({}, { status: 404, statusText: 'Not Found' });
     });
 
     it('trims the name before requesting', () => {
       api.getPerson('  Mira Okafor  ').subscribe();
-      http.expectOne('/api/Person/Mira%20Okafor').flush({}, { status: 404, statusText: 'Not Found' });
+      http
+        .expectOne('/api/Person/Mira%20Okafor')
+        .flush({}, { status: 404, statusText: 'Not Found' });
     });
 
     it('U13 emits null without a request for a blank name', () => {
@@ -185,5 +207,124 @@ describe('StargateApi', () => {
     api.getPeople().subscribe((r) => (result = r));
     http.expectOne('/api/Person').flush(peopleBody([mira]));
     expect(result?.people).toEqual([mira]);
+  });
+
+  describe('updatePerson', () => {
+    const envelope = (status: number, message: string): UpdatePersonResult => ({
+      success: false,
+      message,
+      responseCode: status,
+      person: null,
+    });
+
+    function run(): {
+      outcomes: UpdatePersonOutcome[];
+      errors: unknown[];
+      completed: () => boolean;
+    } {
+      const outcomes: UpdatePersonOutcome[] = [];
+      const errors: unknown[] = [];
+      let done = false;
+      api.updatePerson(7, 'Ada').subscribe({
+        next: (o) => outcomes.push(o),
+        error: (e: unknown) => errors.push(e),
+        complete: () => (done = true),
+      });
+      return { outcomes, errors, completed: () => done };
+    }
+
+    it('U1 sends exactly one PUT /api/Person/7 with the unmodified name only', () => {
+      api.updatePerson(7, '  Ada ').subscribe();
+      const req = http.expectOne('/api/Person/7');
+      expect(req.request.method).toBe('PUT');
+      expect(req.request.body).toEqual({ name: '  Ada ' });
+      expect(Object.keys(req.request.body as object)).toEqual(['name']);
+      req.flush({ ...envelope(200, 'Successful'), success: true, person: mira });
+    });
+
+    it('encodes the id in the path', () => {
+      api.updatePerson('7/../x' as unknown as number, 'Ada').subscribe();
+      http.expectOne('/api/Person/7%2F..%2Fx').flush(envelope(404, 'Person not found'), {
+        status: 404,
+        statusText: 'Not Found',
+      });
+    });
+
+    it('U2 emits updated with the person once and completes', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person/7')
+        .flush({ ...envelope(200, 'Successful'), success: true, person: mira });
+      expect(r.outcomes).toEqual([{ status: 'updated', person: mira }]);
+      expect(r.completed()).toBe(true);
+      expect(r.errors).toEqual([]);
+    });
+
+    it('U3 emits notFound for 404', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person/7')
+        .flush(envelope(404, 'Person not found'), { status: 404, statusText: 'Not Found' });
+      expect(r.outcomes).toEqual([{ status: 'notFound' }]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('U4 emits conflict for 409', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person/7')
+        .flush(envelope(409, 'A person with this name already exists'), {
+          status: 409,
+          statusText: 'Conflict',
+        });
+      expect(r.outcomes).toEqual([{ status: 'conflict' }]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('U5 emits invalid with the body errors for 400', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person/7')
+        .flush(problem('Name'), { status: 400, statusText: 'Bad Request' });
+      expect(r.outcomes).toEqual([{ status: 'invalid', errors: { Name: ['invalid'] } }]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('U6 emits invalid with empty errors for a null, string or errors-less 400 body', () => {
+      for (const body of [null, 'oops', {}, { errors: null }]) {
+        const r = run();
+        http.expectOne('/api/Person/7').flush(body, { status: 400, statusText: 'Bad Request' });
+        expect(r.outcomes).toEqual([{ status: 'invalid', errors: {} }]);
+      }
+    });
+
+    it('U7 propagates a 500 and a network error as HttpErrorResponse', () => {
+      const server = run();
+      http.expectOne('/api/Person/7').flush('boom', { status: 500, statusText: 'Server Error' });
+      expect(server.outcomes).toEqual([]);
+      expect(server.errors[0]).toBeInstanceOf(HttpErrorResponse);
+      expect((server.errors[0] as HttpErrorResponse).status).toBe(500);
+
+      const network = run();
+      http.expectOne('/api/Person/7').error(new ProgressEvent('error'));
+      expect(network.errors[0]).toBeInstanceOf(HttpErrorResponse);
+      expect((network.errors[0] as HttpErrorResponse).status).toBe(0);
+    });
+
+    it('propagates 415 unchanged', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person/7')
+        .flush('', { status: 415, statusText: 'Unsupported Media Type' });
+      expect((r.errors[0] as HttpErrorResponse).status).toBe(415);
+    });
+
+    it('U8 errors with Malformed update response for a 200 without a person', () => {
+      const r = run();
+      http.expectOne('/api/Person/7').flush({ ...envelope(200, 'Successful'), success: true });
+      expect(r.outcomes).toEqual([]);
+      expect(r.errors[0]).toBeInstanceOf(Error);
+      expect((r.errors[0] as Error).message).toBe('Malformed update response');
+    });
   });
 });

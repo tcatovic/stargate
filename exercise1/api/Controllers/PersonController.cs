@@ -70,6 +70,35 @@ namespace StargateAPI.Controllers
             return this.GetResponse(result);
         }
 
+        [HttpPut("{personId}")]
+        [Consumes("application/json")]
+        [RequestSizeLimit(4096)]
+        [EndpointSummary("Rename a person")]
+        [EndpointDescription("Renames the person with this id. The name is NFC-normalised and trimmed, then validated against the shared "
+            + "name rule, compared and stored. Names are unique ignoring ASCII case (SQLite NOCASE) after that normalisation; "
+            + "renaming to the person's own name or a different casing of it succeeds. Idempotent: repeating the same "
+            + "request yields the same state and the same 200 body. Only Person.Name changes; AstronautDetail and "
+            + "AstronautDuty rows are never read or written. No Location header.")]
+        [ProducesResponseType(typeof(UpdatePersonResult), StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(UpdatePersonResult), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(UpdatePersonResult), StatusCodes.Status409Conflict)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status415UnsupportedMediaType)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> UpdatePerson(
+            [FromRoute, Range(1, int.MaxValue), Description("The person's id (personId in GET /Person results).")] int personId,
+            [FromBody] UpdatePersonRequest request,
+            CancellationToken cancellationToken)
+        {
+            var result = await _mediator.Send(new UpdatePerson()
+            {
+                PersonId = personId,
+                Name = request.Name ?? string.Empty
+            }, cancellationToken);
+
+            return this.GetResponse(result);
+        }
+
         [HttpPost("")]
         public async Task<IActionResult> CreatePerson([FromBody] string name)
         {

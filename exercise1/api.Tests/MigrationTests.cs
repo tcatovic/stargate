@@ -35,7 +35,7 @@ public class MigrationTests
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM pragma_foreign_key_list('AstronautDetail') WHERE \"table\" = 'Person' AND on_delete = 'CASCADE'"));
         Assert.Equal(1, db.Scalar<long>("SELECT COUNT(*) FROM pragma_foreign_key_list('AstronautDuty') WHERE \"table\" = 'Person' AND on_delete = 'CASCADE'"));
         Assert.Equal(1, db.Scalar<long>("SELECT \"unique\" FROM pragma_index_list('AstronautDetail') WHERE name = 'IX_AstronautDetail_PersonId'"));
-        Assert.Equal(new[] { TestDatabase.InitialCreate, TestDatabase.LatestMigration }, db.AppliedMigrations());
+        Assert.Equal(TestDatabase.AllMigrations, db.AppliedMigrations());
     }
 
     [Fact]

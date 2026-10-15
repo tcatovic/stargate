@@ -2,6 +2,7 @@ using Dapper;
 using MediatR;
 using StargateAPI.Business.Data;
 using StargateAPI.Business.Dtos;
+using StargateAPI.Business.Validation;
 using StargateAPI.Controllers;
 
 namespace StargateAPI.Business.Queries
@@ -56,7 +57,7 @@ namespace StargateAPI.Business.Queries
             return result;
         }
 
-        private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+        private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : InputRules.Normalize(value);
 
         // Backslash first, so the escapes added for % and _ are not escaped again.
         private static string EscapeLike(string value) =>

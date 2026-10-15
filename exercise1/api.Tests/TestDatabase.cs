@@ -126,6 +126,44 @@ public sealed class TestDatabase : IDisposable
         return text.ToString();
     }
 
+    /// <summary>
+    /// Like <see cref="Dump()"/>, but without the Person row with Id = <paramref name="personId"/> and without that
+    /// person's AstronautDetail and AstronautDuty rows. Equal before and after means "no other person was touched".
+    /// </summary>
+    public string DumpExcept(long personId)
+    {
+        using var connection = Open();
+        var text = new System.Text.StringBuilder();
+        foreach (var (table, column) in new[] { ("Person", "Id"), ("AstronautDetail", "PersonId"), ("AstronautDuty", "PersonId") })
+        {
+            using var command = connection.CreateCommand();
+            command.CommandText = $"SELECT * FROM \"{table}\" WHERE \"{column}\" <> $personId ORDER BY \"Id\"";
+            command.Parameters.AddWithValue("$personId", personId);
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                text.Append(table);
+                for (var i = 0; i < reader.FieldCount; i++)
+                {
+                    text.Append('|').Append(reader.IsDBNull(i) ? "<null>" : Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture));
+                }
+                text.Append('\n');
+            }
+        }
+        return text.ToString();
+    }
+
+    /// <summary>A migrated database holding DevelopmentSeedData (Mira 1, Kenji 2, Tomas Lindqvist 3, Priya 4, Elena 5, Desmond 6).</summary>
+    public static TestDatabase Seeded()
+    {
+        var db = new TestDatabase();
+        db.Migrate();
+        using var context = db.CreateContext();
+        context.People.AddRange(DevelopmentSeedData.People());
+        context.SaveChanges();
+        return db;
+    }
+
     /// <summary>The collation the unique index uses for Person.Name, or null when there is no IX_Person_Name.</summary>
     public string? PersonNameCollation() =>
         Scalar<string?>("SELECT coll FROM pragma_index_xinfo('IX_Person_Name') WHERE name = 'Name'");

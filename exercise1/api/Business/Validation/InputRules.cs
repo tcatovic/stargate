@@ -21,6 +21,13 @@ namespace StargateAPI.Business.Validation
         public const string AllowedCharactersMessage =
             "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters).";
 
+        /// <summary>Earliest and latest allowed duty start date (inclusive). A lower bound is needed anyway: start minus one day must not underflow.</summary>
+        public static readonly DateTime MinDutyDate = new(1900, 1, 1);
+
+        public static readonly DateTime MaxDutyDate = new(2100, 12, 31);
+
+        public const string DutyDateMessage = "Use a date between 1900-01-01 and 2100-12-31.";
+
         // Tab, LF, VT, FF, CR, space. Deliberately not string.Trim()'s Unicode set: a non-ASCII character is never
         // silently removed, so it reaches IsValidName and is rejected.
         private static readonly char[] AsciiWhitespace = ['\t', '\n', '\v', '\f', '\r', ' '];
@@ -32,6 +39,9 @@ namespace StargateAPI.Business.Validation
 
         /// <summary>Removes leading and trailing ASCII whitespace. Never throws.</summary>
         public static string Normalize(string value) => value.Trim(AsciiWhitespace);
+
+        /// <summary>True when the date part of <paramref name="value"/> is within <see cref="MinDutyDate"/> and <see cref="MaxDutyDate"/>.</summary>
+        public static bool IsValidDutyDate(DateTime value) => value.Date >= MinDutyDate && value.Date <= MaxDutyDate;
 
         /// <summary>True when the value has 1 to <see cref="MaxLength"/> characters and matches the pattern. Expects the output of <see cref="Normalize"/>.</summary>
         public static bool IsValidName(string normalized)

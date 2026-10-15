@@ -8,9 +8,7 @@ namespace StargateAPI.Tests;
 
 /// <summary>
 /// Pins the JSON property names and value kinds of the success responses. MVC's default is JsonSerializerDefaults.Web.
-/// Note: GET /AstronautDuty/{name} currently serves the person result (the controller calls GetPersonByName), so its
-/// over-the-wire shape is the GetPersonByNameResult shape below. The true over-the-wire shapes are checked by QA
-/// until the integration-test task adds WebApplicationFactory.
+/// The over-the-wire shapes of the duty endpoints are also checked end to end in AstronautDutyHttpTests.
 /// </summary>
 public class ResponseShapeTests
 {
@@ -35,16 +33,15 @@ public class ResponseShapeTests
         ("currentDutyTitle", JsonValueKind.String), ("careerStartDate", careerStart), ("careerEndDate", careerEnd));
 
     [Fact]
-    public void GetAstronautDutiesByNameResult_HasTheDocumentedShape()
+    public void GetAstronautDutiesByNameResult_HasTheDocumentedShape_AndItemsHaveExactlySixMembers()
     {
         var result = new GetAstronautDutiesByNameResult
         {
             Person = new PersonAstronaut { PersonId = 1, Name = "Elena Vasquez", CurrentRank = "MAJ", CurrentDutyTitle = "Commander", CareerStartDate = new DateTime(2012, 1, 9) },
-            // Dapper-read duties never populate the Person navigation.
             AstronautDuties =
             [
-                new AstronautDuty { Id = 3, PersonId = 1, Rank = "MAJ", DutyTitle = "Commander", DutyStartDate = new DateTime(2019, 1, 1) },
-                new AstronautDuty { Id = 2, PersonId = 1, Rank = "CPT", DutyTitle = "Pilot", DutyStartDate = new DateTime(2016, 3, 1), DutyEndDate = new DateTime(2018, 12, 31) }
+                new AstronautDutyItem { Id = 3, PersonId = 1, Rank = "MAJ", DutyTitle = "Commander", DutyStartDate = new DateTime(2019, 1, 1) },
+                new AstronautDutyItem { Id = 2, PersonId = 1, Rank = "CPT", DutyTitle = "Pilot", DutyStartDate = new DateTime(2016, 3, 1), DutyEndDate = new DateTime(2018, 12, 31) }
             ]
         };
 
@@ -53,12 +50,13 @@ public class ResponseShapeTests
 
         Assert.Equal(WithEnvelope(("person", JsonValueKind.Object), ("astronautDuties", JsonValueKind.Array)), Kinds(root));
         Assert.Equal(PersonShape(JsonValueKind.String, JsonValueKind.Null), Kinds(root.GetProperty("person")));
+        // No "person" member on an item: the dedicated DTO has no navigation property.
         var current = Expect(
             ("id", JsonValueKind.Number), ("personId", JsonValueKind.Number), ("rank", JsonValueKind.String), ("dutyTitle", JsonValueKind.String),
-            ("dutyStartDate", JsonValueKind.String), ("dutyEndDate", JsonValueKind.Null), ("person", JsonValueKind.Null));
+            ("dutyStartDate", JsonValueKind.String), ("dutyEndDate", JsonValueKind.Null));
         var ended = Expect(
             ("id", JsonValueKind.Number), ("personId", JsonValueKind.Number), ("rank", JsonValueKind.String), ("dutyTitle", JsonValueKind.String),
-            ("dutyStartDate", JsonValueKind.String), ("dutyEndDate", JsonValueKind.String), ("person", JsonValueKind.Null));
+            ("dutyStartDate", JsonValueKind.String), ("dutyEndDate", JsonValueKind.String));
         Assert.Equal(current, Kinds(root.GetProperty("astronautDuties")[0]));
         Assert.Equal(ended, Kinds(root.GetProperty("astronautDuties")[1]));
     }
@@ -98,9 +96,9 @@ public class ResponseShapeTests
     }
 
     [Fact]
-    public void CreateAstronautDutyResult_HasTheDocumentedShape()
+    public void CreateAstronautDutyResult_HasTheDocumentedShape_AndNeverSerialisesTheName()
     {
-        using var json = JsonDocument.Parse(JsonSerializer.Serialize(new CreateAstronautDutyResult { Id = 9 }, Web));
+        using var json = JsonDocument.Parse(JsonSerializer.Serialize(new CreateAstronautDutyResult { Id = 9, Name = "x" }, Web));
         Assert.Equal(WithEnvelope(("id", JsonValueKind.Number)), Kinds(json.RootElement));
         Assert.Equal(9, json.RootElement.GetProperty("id").GetInt32());
 

@@ -1,5 +1,4 @@
 using Microsoft.EntityFrameworkCore;
-using StargateAPI.Business.Commands;
 using StargateAPI.Business.Data;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -32,7 +31,6 @@ builder.Services.AddDevelopmentDatabaseInitializer();
 
 builder.Services.AddMediatR(cfg =>
 {
-    cfg.AddRequestPreProcessor<CreateAstronautDutyPreProcessor>();
     cfg.RegisterServicesFromAssemblies(typeof(Program).Assembly);
 });
 

@@ -1,0 +1,193 @@
+# Contract for task 008. Revision 1.
+# Endpoints this task changes: GET /Person (binding/validation refactor, trimming unified with writes),
+# GET /Person/{name} (removed). GET /AstronautDuty: Swagger documentation only (name gains maxLength/pattern).
+# Every other endpoint (POST /Person, PUT /Person/{personId}, POST /AstronautDuty, GET /AstronautDuty behaviour) is
+# unchanged from contracts 006 revision 3 and 007 revision 1 amendment 1.
+# JSON is camelCase. Every property under `required` is always present; nullability is explicit; property order is
+# not significant. `responseCode` always equals the HTTP status.
+#
+# BREAKING vs main (e950203):
+#   - GET /Person/{name} removed. Any GET or HEAD on /Person/{x} (x one non-empty path segment) is answered by
+#     routing with 405 Method Not Allowed, header `Allow: PUT`, empty body (Content-Length 0), because the path
+#     matches PUT /Person/{personId}. No handler runs. Use GET /Person?name=<name>; an unknown name is 200 with an
+#     empty `people` list (it was 404 on the removed route).
+# NOT BREAKING vs main:
+#   - GET /Person: each filter is trimmed of ASCII whitespace (tab, LF, VT, FF, CR, space) BEFORE validation, like
+#     POST/PUT. Values that were 400 only because of edge control whitespace or raw length > 100 are now accepted.
+#     An over-long value's 400 now carries exactly one message, the NameRule message. No accepted input becomes 400.
+#   - Swagger: /Person query parameters lose `minLength: 0`; GET /AstronautDuty `name` gains maxLength and pattern.
+openapi: 3.0.3
+info:
+  title: Stargate ACTS API - task 008 contract
+  version: "008-r1"
+paths:
+  /Person:
+    get:
+      operationId: GetPeople
+      tags: [Person]
+      summary: List people, optionally filtered by name, current rank and current duty title
+      description: >
+        Filters combine with AND; an omitted, empty or whitespace-only filter does not filter. Surrounding ASCII
+        whitespace is removed from each value, then the value is validated against the shared name rule (NameRule).
+        name, rank and dutyTitle are case-insensitive exact matches (name on the full name; rank and dutyTitle on the
+        current AstronautDetail values). People with no astronaut assignment are listed when no rank or dutyTitle
+        filter is given and are never matched by one. Case-insensitivity folds ASCII letters only. Order is
+        unspecified; no paging.
+        Binding (normative): parameter names are matched ignoring case (`name`, `Name`, `NAME` are the same); if a
+        parameter is repeated only its FIRST value is used; unknown parameters are ignored, including `query`,
+        `query.name` and any other prefixed form (they never disable a filter and never skip validation). A value
+        consisting only of whitespace (ASCII or Unicode, as .NET IsNullOrWhiteSpace) means "no filter".
+        Server implementation (normative for api-dev): the three parameters are the properties of the MediatR
+        request class `GetPeople`, bound by `[FromQuery(Name = "")] GetPeople query` on the action, each property
+        carrying `[FromQuery(Name = "<wire name>")]`, `[ValidName]` and `[Description]` (texts below, verbatim).
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: Case-insensitive exact match on the person's full name. Empty or whitespace-only means no filter.
+          schema: { $ref: "#/components/schemas/NameRuleParameter" }
+        - name: rank
+          in: query
+          required: false
+          description: Case-insensitive exact match on the current rank (e.g. MAJ). Excludes people with no assignment.
+          schema: { $ref: "#/components/schemas/NameRuleParameter" }
+        - name: dutyTitle
+          in: query
+          required: false
+          description: Case-insensitive exact match on the current duty title (e.g. Commander, RETIRED). Excludes people with no assignment.
+          schema: { $ref: "#/components/schemas/NameRuleParameter" }
+      responses:
+        "200":
+          description: >
+            Always 200 for valid input, including when nothing matches (empty `people`). success true, message
+            "Successful", responseCode 200. UNCHANGED shape.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/GetPeopleResult" }
+              examples:
+                elena:
+                  value:
+                    people:
+                      - { personId: 5, name: Elena Vasquez, currentRank: MAJ, currentDutyTitle: Commander, careerStartDate: "2012-01-09T00:00:00", careerEndDate: null }
+                    success: true
+                    message: Successful
+                    responseCode: 200
+                unknownName:
+                  value: { people: [], success: true, message: Successful, responseCode: 200 }
+                unassigned:
+                  value:
+                    people:
+                      - { personId: 1, name: Mira Okafor, currentRank: "", currentDutyTitle: "", careerStartDate: null, careerEndDate: null }
+                    success: true
+                    message: Successful
+                    responseCode: 200
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          description: >
+            Unexpected fault. Development: developer exception page. Production: empty body. Never exception text in
+            a JSON body. UNCHANGED.
+  /Person/{name}:
+    get:
+      operationId: GetPersonByName
+      deprecated: true
+      tags: [Person]
+      summary: REMOVED in task 008 - not present in the generated swagger.json
+      description: >
+        This path item exists in this contract only to document the removal; the generated swagger.json has NO
+        `/Person/{name}` path, and `/Person/{personId}` has ONLY `put`. A GET or HEAD on /Person/{x} is answered by
+        endpoint routing (no controller action, no MediatR handler) with 405, `Allow: PUT`, empty body. This holds for
+        any single segment x, including names (`Elena%20Vasquez`), unknown names, digits (`1`), `%20` and `a%2Fb`.
+        `/Person/a/b` (two segments) is 404 from routing, empty body (unchanged).
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        "405":
+          description: Method Not Allowed. Header `Allow` is exactly `PUT`. Body is empty (Content-Length 0). No Content-Type is required.
+          headers:
+            Allow:
+              schema: { type: string, enum: [PUT] }
+  /AstronautDuty:
+    get:
+      operationId: GetAstronautDutiesByName
+      description: >
+        Behaviour UNCHANGED (contract 007 r1 a1). Documentation only: the `name` parameter schema now also shows
+        maxLength 100 and the NameRule pattern (emitted by the shared [ValidName] Swagger parameter filter).
+      parameters:
+        - name: name
+          in: query
+          required: true
+          description: The person's full name, URL-encoded (e.g. Elena%20Vasquez, Aoife%20O%27Brien%20Jr.).
+          schema: { $ref: "#/components/schemas/NameRuleParameter" }
+      responses:
+        "200": { description: Unchanged (contract 007). }
+        "400": { description: Unchanged (contract 007). }
+        "404": { description: Unchanged (contract 007). }
+        "500": { description: Unchanged (contract 007). }
+components:
+  schemas:
+    NameRuleParameter:
+      type: string
+      maxLength: 100
+      pattern: "^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\\z"
+      description: >
+        As emitted in swagger.json: type string, maxLength 100, the pattern verbatim (InputRules.AllowedCharactersPattern),
+        and NO minLength. The server applies the pattern and the 1..100 length to the value AFTER removing surrounding
+        ASCII whitespace (tab, LF, VT, FF, CR, space); a whitespace-only value never reaches validation (no filter).
+    PersonAstronaut:
+      type: object
+      additionalProperties: false
+      required: [personId, name, currentRank, currentDutyTitle, careerStartDate, careerEndDate]
+      properties:
+        personId: { type: integer, format: int32, minimum: 1 }
+        name: { type: string, description: Stored name. }
+        currentRank: { type: string, description: Empty string "" when the person has no assignment (rule 2); never null. }
+        currentDutyTitle: { type: string, description: Empty string "" when the person has no assignment; never null. }
+        careerStartDate: { type: string, nullable: true, description: "'YYYY-MM-DDT00:00:00' (no offset); null when no assignment." }
+        careerEndDate: { type: string, nullable: true, description: "'YYYY-MM-DDT00:00:00'; null unless retired." }
+    GetPeopleResult:
+      type: object
+      additionalProperties: false
+      required: [people, success, message, responseCode]
+      properties:
+        people: { type: array, items: { $ref: "#/components/schemas/PersonAstronaut" } }
+        success: { type: boolean, enum: [true] }
+        message: { type: string, enum: [Successful] }
+        responseCode: { type: integer, enum: [200] }
+    ValidationProblemDetails:
+      type: object
+      required: [type, title, status, errors, traceId]
+      properties:
+        type: { type: string, enum: ["https://tools.ietf.org/html/rfc9110#section-15.5.1"] }
+        title: { type: string, enum: ["One or more validation errors occurred."] }
+        status: { type: integer, enum: [400] }
+        errors:
+          type: object
+          description: >
+            Keys are exactly the wire names of the failing parameters, case as written here: `name`, `rank`,
+            `dutyTitle`. Each present key maps to exactly ONE message, always the NameRule message:
+            "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)."
+            Several invalid parameters give several keys. No key for valid or omitted parameters. The submitted value
+            never appears anywhere in the body (decoded or encoded).
+          additionalProperties:
+            type: array
+            minItems: 1
+            maxItems: 1
+            items: { type: string }
+        traceId: { type: string }
+  responses:
+    ValidationFailed:
+      description: >
+        At least one supplied, non-whitespace filter fails NameRule after trimming. Content-Type
+        application/problem+json. UNCHANGED shape; changed only in that (a) edge ASCII control whitespace is trimmed
+        before the check and (b) an over-long value now yields the NameRule message only.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ValidationProblemDetails" }
+          example:
+            type: "https://tools.ietf.org/html/rfc9110#section-15.5.1"
+            title: One or more validation errors occurred.
+            status: 400
+            errors:
+              name: ["Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)."]
+            traceId: "00-0123456789abcdef0123456789abcdef-0123456789abcdef-00"

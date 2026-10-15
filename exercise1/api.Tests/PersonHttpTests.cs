@@ -66,8 +66,15 @@ public sealed class PersonHttpTests : IDisposable
     [InlineData("name")]
     [InlineData("rank")]
     [InlineData("dutyTitle")]
-    public Task H1_TooLongFilter_Is400(string parameter) =>
-        AssertBadRequest($"/Person?{parameter}={new string('a', 101)}", parameter);
+    public async Task H1_TooLongFilter_Is400_WithOnlyTheSharedNameRuleMessage(string parameter)
+    {
+        var (status, _, json) = await Get($"/Person?{parameter}={new string('a', 101)}");
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        var errors = json.GetProperty("errors").EnumerateObject().ToList();
+        Assert.Equal(parameter, Assert.Single(errors).Name); // ordinal: the wire name, not Name/Rank/DutyTitle
+        ProblemAssert.HasOnlyNameError(json, parameter, ProblemAssert.NameRuleMessage);
+    }
 
     [Theory]
     [InlineData("/Person?name=%25", "name", "%")]
@@ -77,18 +84,20 @@ public sealed class PersonHttpTests : IDisposable
     public Task H2_DisallowedCharacters_Are400_AndTheValueIsNotEchoed(string url, string key, string value) =>
         AssertBadRequest(url, key, value);
 
-    [Fact]
-    public Task H1b_TooLongPathName_Is400() =>
-        AssertBadRequest($"/Person/{new string('a', 101)}", "name");
-
+    // Edge control whitespace is trimmed before validation, exactly like the write endpoints, so it is accepted.
     [Theory]
-    [InlineData("/Person?name=abc%0A", "name")]
-    [InlineData("/Person?name=%0Aabc", "name")]
-    [InlineData("/Person?rank=abc%0A", "rank")]
-    [InlineData("/Person?dutyTitle=%0Aabc", "dutyTitle")]
-    [InlineData("/Person/abc%0A", "name")]
-    [InlineData("/Person/%0Aabc", "name")]
-    public Task H2b_NewlinesAreRejected_IncludingATrailingOne(string url, string key) => AssertBadRequest(url, key);
+    [InlineData("/Person?name=abc%0A")]
+    [InlineData("/Person?name=%0Aabc")]
+    [InlineData("/Person?rank=abc%0A")]
+    [InlineData("/Person?dutyTitle=%0Aabc")]
+    public async Task H2b_EdgeNewlines_AreTrimmed_LikeWrites(string url)
+    {
+        var (status, _, json) = await Get(url);
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(200, json.GetProperty("responseCode").GetInt32());
+        Assert.Equal(0, json.GetProperty("people").GetArrayLength());
+    }
 
     // Whitespace-only values never reach validation over HTTP: MVC binds them to null (ConvertEmptyStringToNull), the same
     // as the handler's own "whitespace means no filter" (GetPeopleQueryTests.P10). So a lone tab is 200 with everyone,
@@ -108,7 +117,7 @@ public sealed class PersonHttpTests : IDisposable
     [Fact]
     public async Task H3_QuoteEqualsInjectionString_FailsTheCharacterRule()
     {
-        foreach (var url in new[] { "/Person?name=x'%20OR%20'1'%3D'1", "/Person/x'%20OR%20'1'%3D'1" })
+        foreach (var url in new[] { "/Person?name=x'%20OR%20'1'%3D'1" })
         {
             var (status, body, _) = await Get(url);
             Assert.Equal(HttpStatusCode.BadRequest, status);
@@ -129,18 +138,6 @@ public sealed class PersonHttpTests : IDisposable
         Assert.Equal(6, all.GetProperty("people").GetArrayLength());
     }
 
-    [Theory]
-    [InlineData("/Person/Mira%20Okafor")]
-    [InlineData("/Person/mira%20okafor")]
-    public async Task H5_FindsByNameIgnoringCase_AndDecodesSpaces(string url)
-    {
-        var (status, _, json) = await Get(url);
-
-        Assert.Equal(HttpStatusCode.OK, status);
-        Assert.Equal("Mira Okafor", json.GetProperty("person").GetProperty("name").GetString());
-        Assert.Equal(200, json.GetProperty("responseCode").GetInt32());
-    }
-
     [Fact]
     public async Task H5b_ApostropheNameRoundTrips()
     {
@@ -150,21 +147,12 @@ public sealed class PersonHttpTests : IDisposable
             context.SaveChanges();
         }
 
-        var (status, _, json) = await Get("/Person/aoife%20o'brien");
+        var (status, _, json) = await Get("/Person?name=aoife%20o'brien");
 
         Assert.Equal(HttpStatusCode.OK, status);
-        Assert.Equal("Aoife O'Brien", json.GetProperty("person").GetProperty("name").GetString());
-    }
-
-    [Fact]
-    public async Task H6_UnknownName_Is404WithTheEnvelope()
-    {
-        var (status, _, json) = await Get("/Person/Nobody");
-
-        Assert.Equal(HttpStatusCode.NotFound, status);
-        Assert.Equal(404, json.GetProperty("responseCode").GetInt32());
-        Assert.False(json.GetProperty("success").GetBoolean());
-        Assert.Equal(JsonValueKind.Null, json.GetProperty("person").ValueKind);
+        var people = json.GetProperty("people");
+        Assert.Equal(1, people.GetArrayLength());
+        Assert.Equal("Aoife O'Brien", people[0].GetProperty("name").GetString());
     }
 
     [Fact]
@@ -175,9 +163,6 @@ public sealed class PersonHttpTests : IDisposable
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal(6, json.GetProperty("people").GetArrayLength());
     }
-
-    [Fact]
-    public async Task H8_BlankPathName_Is400() => await AssertBadRequest("/Person/%20", "name");
 
     [Fact]
     public async Task H10_FilterOverHttp_ReturnsTheMatchingPerson()
@@ -207,8 +192,10 @@ public sealed class PersonHttpTests : IDisposable
         }
         Assert.Equal(new[] { "200", "400", "500" }, ResponseCodes(list));
 
-        var single = json.GetProperty("paths").GetProperty("/Person/{name}").GetProperty("get");
-        Assert.Equal(new[] { "200", "400", "404", "500" }, ResponseCodes(single));
+        var paths = json.GetProperty("paths");
+        Assert.False(paths.TryGetProperty("/Person/{name}", out _));
+        Assert.Equal(new[] { "put" }, paths.GetProperty("/Person/{personId}").EnumerateObject().Select(o => o.Name).ToArray());
+        Assert.DoesNotContain(json.GetProperty("components").GetProperty("schemas").EnumerateObject(), o => o.Name.StartsWith("GetPersonBy", StringComparison.Ordinal));
     }
 
     [Theory]

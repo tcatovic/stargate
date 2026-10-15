@@ -10,7 +10,7 @@ Domain spec: `exercise1/README.md` (requirements and rules).
 exercise1/api/                 ASP.NET Core 8 Web API (StargateAPI.csproj)
   Controllers/                 Thin controllers -> IMediator. BaseResponse + GetResponse() map ResponseCode to HTTP status
   Business/Commands/           MediatR commands, handlers, pre-processors (CreateAstronautDuty only; CreatePerson validates in its handler)
-  Business/Queries/            MediatR queries + handlers (GetPeople, GetPersonByName, GetAstronautDutiesByName)
+  Business/Queries/            MediatR queries + handlers (GetPeople, GetAstronautDutiesByName)
   Business/Data/               EF Core entities (Person, AstronautDetail, AstronautDuty) + StargateContext
   Business/Dtos/               PersonAstronaut
   Business/Migrations/         EF Core migrations

@@ -60,15 +60,16 @@ public sealed class PersonResolutionPreIndexHttpTests : IDisposable
     [InlineData("Bob", 9, "Uppercase Bob Duty")]
     [InlineData("bob", 4, "Lowercase Bob Duty")]
     [InlineData("BOB", 4, "Lowercase Bob Duty")]
-    public async Task GetDuties_AndGetPerson_ResolveTheSamePerson(string name, int expectedId, string expectedTitle)
+    public async Task GetDuties_PicksTheExactCaseRow_WhileGetPeopleListsEveryCaseVariant(string name, int expectedId, string expectedTitle)
     {
         var duties = await _host.Get("/AstronautDuty?name=" + name);
-        var person = await _host.Get("/Person/" + name);
+        var people = await _host.Get("/Person?name=" + name);
 
         Assert.Equal(HttpStatusCode.OK, duties.Status);
         Assert.Equal(expectedId, duties.Json.GetProperty("person").GetProperty("personId").GetInt32());
         Assert.Equal(expectedTitle, Assert.Single(duties.Json.GetProperty("astronautDuties").EnumerateArray()).GetProperty("dutyTitle").GetString());
-        Assert.Equal(HttpStatusCode.OK, person.Status);
-        Assert.Equal(expectedId, person.Json.GetProperty("person").GetProperty("personId").GetInt32());
+        // The list is a filtered collection, so before the unique index exists it shows both case variants (ids 4 and 9).
+        Assert.Equal(HttpStatusCode.OK, people.Status);
+        Assert.Equal(new[] { 4, 9 }, people.Json.GetProperty("people").EnumerateArray().Select(p => p.GetProperty("personId").GetInt32()).Order().ToArray());
     }
 }

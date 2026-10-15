@@ -463,10 +463,11 @@ public sealed class PersonUpdateHttpTests : IDisposable
     [Fact]
     public async Task P15_AnUnrouteableMethodOrPath_IsNotAffected()
     {
+        // GET /Person/{name} was removed in task 008; the path now matches only PUT /Person/{personId}.
         var (getStatus, _, _) = await Get("/Person/Mira%20Okafor");
         var (deleteStatus, _, _) = await Send(HttpMethod.Delete, "/Person/1");
 
-        Assert.Equal(HttpStatusCode.OK, getStatus);
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, getStatus);
         Assert.Equal(HttpStatusCode.MethodNotAllowed, deleteStatus);
     }
 }

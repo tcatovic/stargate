@@ -283,7 +283,7 @@ public sealed class PersonUpdateHttpTests : IDisposable
         var (status, text, _) = await Put(mira, new string('a', 5000));
 
         // [RequestSizeLimit(4096)] makes Kestrel answer 413. TestServer does not enforce the Kestrel limit, so over the
-        // in-memory server the request is still refused, by the 800-character raw bound, as a 400. Either way it is
+        // in-memory server the request is still refused, by the 100-character name rule, as a 400. Either way it is
         // rejected, nothing changes and the submitted text is not echoed; the 413 itself is checked against real Kestrel.
         Assert.True(status is HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.BadRequest, status.ToString());
         Assert.DoesNotContain(new string('a', 50), text);

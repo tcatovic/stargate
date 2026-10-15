@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Replace GetPersonByName with one GetPeople query object and exact name match
-status: planned   # draft | ready | planned | approved | in-progress | done | blocked
+status: approved   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]
 ---
 
@@ -36,6 +36,12 @@ Note on references: the task 001 code lives on the open PR #4 branch (`task/001-
 - **Empty result:** unchanged shape: 200, `success: true`, empty `people`, no special message.
 - **Validation:** a `name` that fails the character rule (for example containing `%`) still returns **400**, as in task 001.
 - Breaking changes (to be called out in the changelog): `GET /Person/{name}` is removed; `GET /Person?name=` changes from contains to exact; an unknown person via the by-name lookup changes from 404 to 200 with an empty list.
+
+## Plan review answers (accepted by the user)
+- **The removed `GET /Person/{name}` route returns 405** (Allow: PUT, empty body), because the path still matches the route template of `PUT /Person/{personId}`; this replaces the earlier "plain 404" assumption. No `{personId:int}` constraint is added in this task (that would change `PUT /Person/abc` from 400 to 404).
+- **The over-long-value 400 carries the single shared name-rule message**, the same as the write endpoints (trimming is unified; the raw value is no longer validated).
+- **Binding:** the query object is `GetPeople` itself, bound with `[FromQuery(Name = "")]` on the action parameter so a caller cannot skip validation (`?query=x&name=%25`), drop the filter, or alias `query.name`; tests Q5a-Q5f keep it fixed. Wire names stay `name`, `rank`, `dutyTitle`.
+- `CLAUDE.md`'s layout line is updated in this task's PR to `(GetPeople, GetAstronautDutiesByName)`.
 
 ## Acceptance criteria
 API, removed route

@@ -265,6 +265,36 @@ public sealed class PersonQueryHttpTests : IDisposable
     [Fact]
     public Task Q5f_AKeyWithoutAValue_MeansNoFilter() => AssertPeople("?name", All6);
 
+    [Theory]
+    [InlineData("?query=&name=%25")]
+    [InlineData("?query[0]=x&name=%25")]
+    [InlineData("?query.foo=1&name=%25")]
+    [InlineData("?QUERY=x&name=%25")]
+    [InlineData("?query=x&Name=%25")]
+    [InlineData("?query.rank=MAJ&name=%25")]
+    public Task Q5g_PrefixLikeKeys_NeverSkipNameValidation(string query) => AssertRejected(query, ["name"], "%");
+
+    [Fact]
+    public Task Q5h_QueryDotRank_DoesNotSkipRankValidation() => AssertRejected("?rank=%25&query.rank=MAJ", ["rank"], "%");
+
+    [Fact]
+    public Task Q5i_QueryDotName_IsNotAnAlias_EvenForAnInvalidValue() => AssertPeople("?query.name=%25", All6);
+
+    // Indexed keys are a different key from "name" and are ignored. An empty FIRST value wins and means no filter:
+    // this is the documented first-value-wins behaviour (only the first value of a repeated parameter is bound).
+    [Theory]
+    [InlineData("?name[0]=Elena%20Vasquez")]
+    [InlineData("?name[0]=%25")]
+    [InlineData("?name=&name=Elena%20Vasquez")]
+    public Task Q5j_IndexedKeysAreIgnored_AndAnEmptyFirstValueMeansNoFilter(string query) => AssertPeople(query, All6);
+
+    [Theory]
+    [InlineData("?name=%00", "\0")]
+    [InlineData("?name=%FF", "\uFFFD")]
+    [InlineData("?name=Elena%20Vasquez,Nobody", "Elena Vasquez,Nobody")]
+    [InlineData("?name=%25&name=Elena%20Vasquez", "%")]
+    public Task Q5k_OddEncodings_Are400_WithoutEcho(string query, string value) => AssertRejected(query, ["name"], value);
+
     // ---- Q6 trimming is the write rule ----
 
     [Theory]

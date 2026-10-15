@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Replace GetPersonByName with one GetPeople query object and exact name match
-status: in-progress   # draft | ready | planned | approved | in-progress | done | blocked
+status: done   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]
 ---
 
@@ -31,7 +31,7 @@ Note on references: the task 001 code lives on the open PR #4 branch (`task/001-
 - Unknown name is 200 with an empty list. The 404 that task 001 introduced for `GET /Person/{name}` disappears with that endpoint. This applies to the `people` collection only; the duties endpoint (task 007) answers for one person's view and may return 404 for an unknown name.
 - If richer querying is wanted later (partial match, paging, sorting), the user will implement OData. None of that is built here.
 - Everything else stays as in task 001: `InputRules`, the 100-character bound, the allowed-character rule, the 400 body shape (no input echo), people without an astronaut assignment never match `rank` or `dutyTitle` (rule 2), the response shape of `GET /Person`, and ASCII-only case-insensitivity.
-- **Removed route:** a request to `GET /Person/{name}` after this task gets a plain routing **404**, with no deprecation period (pre-release API, single consumer, and the UI changes in the same commit).
+- **Removed route:** a request to `GET /Person/{name}` after this task is answered **405** with `Allow: PUT` and an empty body (it still matches the route template of `PUT /Person/{personId}`); there is no deprecation period (pre-release API, single consumer, and the UI changes in the same commit). This supersedes the earlier "plain routing 404" wording.
 - **One class:** the query object is a single class used as the MediatR `GetPeople` request (one definition); split it only if the architect shows the validation attributes cannot sit there.
 - **Empty result:** unchanged shape: 200, `success: true`, empty `people`, no special message.
 - **Validation:** a `name` that fails the character rule (for example containing `%`) still returns **400**, as in task 001.
@@ -45,7 +45,7 @@ Note on references: the task 001 code lives on the open PR #4 branch (`task/001-
 
 ## Acceptance criteria
 API, removed route
-- [ ] `GET /Person/{name}` no longer exists. A request to it returns 404 from routing (no handler runs, no person data in the body). There is no redirect and no 410. See the open question on deprecation.
+- [ ] `GET /Person/{name}` no longer has a handler. A GET or HEAD request to it returns **405** with `Allow: PUT` and an empty body (it matches the route template of `PUT /Person/{personId}`; no handler runs, no person data in the body). There is no redirect and no 410.
 - [ ] `GetPersonByName`, its handler, `GetPersonByNameResult` and any DI or registration for them are gone from the API project; the solution builds with `-warnaserror`.
 - [ ] `AstronautDutyController` has no reference to `GetPersonByName` (this is satisfied by task 007; this task verifies it and fails the build if the type is still referenced).
 
@@ -72,7 +72,7 @@ UI
 - [ ] Vitest tests with `HttpTestingController` cover `listPeople` with and without `name`, and no test references `getPerson`.
 
 Tests and docs
-- [ ] xUnit tests that targeted `GetPersonByName` or `GET /Person/{name}` (handler tests, `WebApplicationFactory` HTTP tests, null-guard and response-shape tests) are removed or rewritten against `GET /Person?name=`. A test asserts that `GET /Person/{name}` returns 404.
+- [ ] xUnit tests that targeted `GetPersonByName` or `GET /Person/{name}` (handler tests, `WebApplicationFactory` HTTP tests, null-guard and response-shape tests) are removed or rewritten against `GET /Person?name=`. A test asserts that `GET /Person/{name}` returns 405.
 - [ ] Tests for the contains behaviour and for wildcard escaping from task 001 are replaced by exact-match tests (including the `?name=ra` case above).
 - [ ] The changelog in `exercise1/api/README.md` lists the breaking changes under Decisions.
 - [ ] Any contract or doc still describing `GET /Person/{name}` or contains matching is updated or marked superseded (the 001 contract under `docs/contracts/001/` stays as history; this task does not need to edit it).
@@ -95,6 +95,6 @@ Interplay with the task 002 follow-up (NFC and invisible letters in `InputRules`
 
 An empty result on a lookup that used to be 404 may hide typos from callers. Callers that need to know whether a person exists must now check for an empty `people` list. This is intentional (filtered collection semantics) and part of the breaking change.
 
-A request to the removed route returns the framework's 404, which is also what an unknown person used to return on that route. Old clients that only look at the status cannot tell the two apart. See the open question.
+A request to the removed route returns 405 (Allow: PUT), which differs from the 404 an unknown person used to get on that route, so old clients that only look at the status can tell the two apart.
 
 Domain rules involved: 1 (name identifies a person, so exact lookup), 2 (people without an assignment have no astronaut rows, so they never match `rank` or `dutyTitle`).

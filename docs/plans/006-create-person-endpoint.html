@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plan 006: Make POST /Person a proper, validated create endpoint (rev. 2)</title>
+<title>Plan 006: Make POST /Person a proper, validated create endpoint (rev. 3)</title>
 <style>
   :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
   @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
@@ -31,8 +31,17 @@
 </head>
 <body>
 <main>
-<p class="meta">Task 006 &middot; plan <strong>revision 2</strong> &middot; baseline <code>main</code> at <code>f42dc41</code> (tasks 001-005 merged) &middot; branch <code>task/006-create-person-endpoint</code> &middot; status: awaiting approval together with <a href="../contracts/006/contract.html">contract 006</a></p>
+<p class="meta">Task 006 &middot; plan <strong>revision 3</strong> &middot; baseline <code>main</code> at <code>f42dc41</code> (tasks 001-005 merged) &middot; branch <code>task/006-create-person-endpoint</code> &middot; implementation merged at <code>998036f</code> &middot; status: revision 3 awaiting re-approval together with <a href="../contracts/006/contract.html">contract 006</a></p>
 <h1>Plan 006: Make POST /Person a proper, validated create endpoint</h1>
+
+<div class="card amend"><p><strong>Revision 3: what changed from revision 2</strong> (the review round changed the merged code after revision 2; this revision makes the plan and contract match it, and records open issues)</p>
+<ol>
+<li><strong>Name rule: at least one ASCII letter or digit</strong> (sections 1, 4.1, 4.6, 6, 7). Punctuation-only names (<code>.</code>, <code>..</code>, <code>'</code>, <code>-</code>, <code>. -</code>) are 400 on all four endpoints. Why: <code>..</code> breaks the UI's URL building (<code>`${baseUrl}/Person/${encodeURIComponent(name)}`</code> with <code>..</code> resolves to <code>/api/</code>), and none of them is a name. Pattern <code>^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z</code> (no <code>\d</code>, no <code>IgnoreCase</code>, <code>\z</code>); the lookahead only scans allowed punctuation, so matching stays linear. Message: "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)."</li>
+<li><strong>Malformed JSON gets generic messages only</strong> (sections 4.3, 5, 8). <code>Program.cs</code> sets <code>AllowInputFormatterExceptionMessages = false</code>. <code>[]</code>, <code>{"name":4242}</code>, a bare string and truncated JSON are still 400, with messages such as "The input was not valid." and "The request field is required.", never .NET type names, paths, line numbers or byte positions. Why: the System.Text.Json messages leaked internal type names. Clients still must not parse messages.</li>
+<li><strong>Tests</strong> (section 8): weak tests removed (R13, R21, R25's source-text checks, F5, create H3, update P13, duplicate rows); no-echo checks strengthened (<code>ProblemAssert</code>: exact <code>errors.name</code> literal plus a scan of the decoded JSON); new C6, C7, P18, P19, R27, R28, F6, F7, P20 and M1. tests.md now matches the merged suite.</li>
+<li><strong>Open issues recorded</strong> (section 9, "Open: not part of this task, not fixed"): second-order SQL injection through <code>POST /AstronautDuty</code>, and no authentication on any write endpoint. New Question 2 (section 13).</li>
+<li>Invisible characters in examples are now written as <code>&lt;U+XXXX&gt;</code>. Sections changed: header, 1, 4.1, 4.3, 4.6, 5, 6, 7, 8.1, 8.2, 8.3, 9, 12, 13.</li>
+</ol></div>
 
 <div class="card amend"><p><strong>Revision 2: what changed from revision 1</strong> (scope change by the user after reviewing revision 1)</p>
 <ol>
@@ -53,7 +62,7 @@
 <h2>1. Summary and verdict</h2>
 <p>This task delivers three separately reviewable changes in one branch:</p>
 <ol>
-<li><strong>C1, ASCII-only name rule.</strong> <code>InputRules</code> becomes trim (ASCII whitespace), then 1-100 characters matching <code>^[A-Za-z0-9 .'-]+\z</code>. It is used unchanged by <code>GET /Person</code> (filters), <code>GET /Person/{name}</code>, <code>PUT /Person/{personId}</code> and <code>POST /Person</code>. Any non-ASCII character returns 400.</li>
+<li><strong>C1, ASCII-only name rule.</strong> <code>InputRules</code> becomes trim (ASCII whitespace), then 1-100 characters matching <code>^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z</code> (rev. 3: at least one ASCII letter or digit). It is used unchanged by <code>GET /Person</code> (filters), <code>GET /Person/{name}</code>, <code>PUT /Person/{personId}</code> and <code>POST /Person</code>. Any non-ASCII character returns 400.</li>
 <li><strong>C2, exact name filter.</strong> <code>GET /Person?name=</code> becomes an exact, case-insensitive, trimmed match on the full name.</li>
 <li><strong>C3, POST /Person feature.</strong> Object body <code>{ "name": "..." }</code>. 201 with <code>{ id, success, message, responseCode }</code> and <code>Location: /Person?name=&lt;encoded&gt;</code>. 400, 409 (pre-check plus <code>IsUniqueViolation</code>), 415 and 413 as for PUT. No <code>try/catch</code>. <code>CreatePersonPreProcessor</code> is deleted.</li>
 </ol>
@@ -101,7 +110,7 @@
 <h2>4. Approach</h2>
 <h3>4.1 C1: the ASCII-only name rule (one definition, all four endpoints)</h3>
 <pre><code>Normalize(value) = value.Trim(' ', '\t', '\n', '\v', '\f', '\r')      // ASCII whitespace only
-IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-Za-z0-9 .'-]+\z")   // CultureInvariant, no IgnoreCase</code></pre>
+IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z")   // CultureInvariant, no IgnoreCase, 100 ms timeout</code></pre>
 <ul>
 <li><strong>Trim set: ASCII whitespace only.</strong> Non-ASCII whitespace at an edge (NBSP, U+3000, U+0085, U+2003, ...) is <em>not</em> trimmed, so the name is <strong>400</strong>.
   <ul>
@@ -110,6 +119,7 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
     <li>ASCII tab, CR and LF at the edges are still trimmed, which keeps today's write behaviour. Existing tests H3/H9 (<code>"Mira Okafor\t"</code>) and R11 (<code>"\r\nAda\r\n"</code>) stay as they are.</li>
   </ul></li>
 <li><strong>Pattern written out</strong> as <code>A-Za-z0-9</code>, never <code>\d</code> (it matches Arabic-Indic and other digits) and never with <code>RegexOptions.IgnoreCase</code> (under it <code>K</code> U+212A KELVIN SIGN matches <code>k</code>, and <code>ſ</code> matches <code>s</code>). <code>\z</code> stays, so a trailing <code>\n</code> never matches. Tests R4b and R25 pin these.</li>
+<li><strong>At least one ASCII letter or digit (rev. 3).</strong> Punctuation-only values (<code>.</code>, <code>..</code>, <code>'</code>, <code>-</code>, <code>. -</code>, 100 periods) are invalid; <code>a.</code>, <code>A-1</code>, <code>. a</code> and <code>7</code> are valid. Enforced by the lookahead <code>(?=[ .'-]*[A-Za-z0-9])</code>: it can only consume allowed punctuation before it needs a letter or digit, so it fails fast on other characters and is linear (R28 bounds the time). Reason: <code>..</code> as a path segment is resolved away by URL normalisation, so the UI's <code>getPerson</code> would call <code>/api/</code>. Tests R27, R28, create P19, F6, F7.</li>
 <li><strong>Length is measured after trimming</strong>, 1-100, as the task's own rule says. A 100-letter name padded with spaces stays valid (R18).</li>
 <li><strong>Raw bound (800): removed.</strong> It existed only so NFC never ran on unbounded input. ASCII trimming and the length check are linear and cheap, and the regex runs only on at most 100 characters.</li>
 <li><strong><code>[RequestSizeLimit(4096)]</code>: kept on PUT and POST.</strong>
@@ -119,7 +129,7 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
     <li>4096 bytes is far above any valid body: a 100-character name in JSON is at most about 210 bytes even with every <code>'</code> escaped as <code>'</code>.</li>
   </ul>
   Query and route values on GET are bounded by Kestrel's request-line limit (8 KB) and then by the 100-character check.</li>
-<li><strong>Message</strong> becomes "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods (at most 100 characters)." The old "letters" would mislead someone who typed <code>Zoë</code>. Clients must not parse messages, so this is not breaking. R19 is updated.</li>
+<li><strong>Message</strong> becomes "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)." (rev. 3 wording) The old "letters" would mislead someone who typed <code>Zoë</code>. Clients must not parse messages, so this is not breaking. R19 is updated.</li>
 <li><strong>Case-insensitivity</strong>: SQLite NOCASE folds ASCII only, which now covers every valid name exactly. The "<code>Émile</code> vs <code>émile</code>" limit disappears because both are 400.</li>
 <li><strong>Read side</strong>: the GET attributes keep validating the <em>raw</em> value with the same pattern constant. So a GET value with a tab or newline at an edge is 400 (as today, H2b), while a write trims it.
   <ul>
@@ -156,6 +166,7 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 <li>No <code>try/catch</code>.</li>
 <li><code>Created("/Person?name=" + Uri.EscapeDataString(storedName), result)</code> on 201, otherwise <code>GetResponse</code>.</li>
 </ul>
+<p><strong>Malformed JSON (rev. 3).</strong> <code>Program.cs</code> adds <code>.AddJsonOptions(o =&gt; o.AllowInputFormatterExceptionMessages = false)</code>. For POST and PUT, a body System.Text.Json cannot read as the request type is still 400 <code>ValidationProblemDetails</code> with non-empty <code>errors</code>, but every message is generic (for example <code>{"$":["The input was not valid."],"request":["The request field is required."]}</code> for <code>[]</code>, or an entry under <code>$.name</code> for <code>{"name":4242}</code>). Tests <code>M1</code> in both HTTP files assert that no key or message contains <code>StargateAPI</code>, <code>System.</code>, <code>Path</code>, <code>LineNumber</code>, <code>BytePosition</code> or <code>converted</code>.</p>
 <p>The order of checks is 415/413, then 400, then 409. <code>CreatePersonPreProcessor</code> is deleted: a pre-processor can only throw, the race has to be caught in the handler anyway, and PUT already uses handler checks. A 409 returns <code>id: null</code>.</p>
 <h3>4.4 Location</h3>
 <p>The header is <code>/Person?name=&lt;Uri.EscapeDataString(stored name)&gt;</code>, for example <code>O'Brien Jr.</code> becomes <code>/Person?name=O%27Brien%20Jr.</code>. After C2, a GET of it returns exactly the created person, and after 008 it still does. The value is relative and always ASCII.</p>
@@ -171,9 +182,10 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 <tr><td>POST duplicate <code>"Mira Okafor"</code>, <code>"mira okafor "</code></td><td>500 with EF's message, or 200 and a padded duplicate row</td><td>409, <code>id: null</code>, nothing stored</td></tr>
 <tr><td>POST <code>""</code>, <code>"&lt;script&gt;"</code>, 3000 characters</td><td>200, stored</td><td>400</td></tr>
 <tr><td>POST, PUT <code>"Zoë"</code>, <code>"José"</code>, <code>"Émile"</code>, <code>"Ｍira"</code>, Cyrillic <code>"Аda"</code>, <code>"Ada 🚀"</code></td><td>POST: 200 stored. PUT: 200 (letters) or 400 (emoji, surrogates)</td><td><strong>400</strong> on both</td></tr>
-<tr><td>POST, PUT <code>" Ada"</code> (NBSP edge)</td><td>PUT: trimmed, 200. POST: stored padded</td><td><strong>400</strong></td></tr>
+<tr><td>POST, PUT <code>"&lt;U+00A0&gt;Ada"</code> (NBSP edge)</td><td>PUT: trimmed, 200. POST: stored padded</td><td><strong>400</strong></td></tr>
 <tr><td>POST, PUT <code>"Ada\t"</code>, <code>"\r\nAda"</code></td><td>PUT: trimmed, 200</td><td>Trimmed, 200 or 201</td></tr>
 <tr><td>GET <code>?name=José</code>, <code>/Person/Jos%C3%A9</code></td><td>200 (match or empty), 200 or 404</td><td><strong>400</strong></td></tr>
+<tr><td>POST, PUT, GET <code>"."</code>, <code>".."</code>, <code>"'"</code>, <code>"-"</code> (rev. 3)</td><td>GET: 200 (no match). PUT: 200 renamed. POST: 200 stored</td><td><strong>400</strong></td></tr>
 <tr><td>GET <code>?name=ra</code></td><td>200: Mira Okafor, Priya Raman</td><td>200: <code>[]</code></td></tr>
 <tr><td>GET <code>?name=%20ELENA%20VASQUEZ</code></td><td>200: Elena Vasquez</td><td>200: Elena Vasquez</td></tr>
 <tr><td>GET <code>?name=elena</code></td><td>200: Elena Vasquez</td><td>200: <code>[]</code></td></tr>
@@ -185,6 +197,7 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 <tr><th>Commit set</th><th>Files</th></tr>
 <tr><td><strong>C1</strong> <code>refactor(api)!: ASCII-only shared name rule</code></td><td><code>Business/Validation/InputRules.cs</code>, <code>ValidNameAttribute.cs</code>, <code>Business/Commands/UpdatePerson.cs</code> (line 56), <code>Controllers/PersonController.cs</code> (PUT description only), tests per 8.1 (<code>InputRulesTests</code>, <code>UpdatePersonHandlerTests</code>, <code>PersonUpdateHttpTests</code>, <code>GetPeopleQueryTests.P11</code>), and the README changelog C1 entry plus the 002 notes.</td></tr>
 <tr><td><strong>C2</strong> <code>feat(api)!: exact case-insensitive name filter on GET /Person</code></td><td><code>Business/Queries/GetPeople.cs</code>, <code>PersonController.cs</code> (GET description and the <code>name</code> parameter description), tests per 8.1 (<code>GetPeopleQueryTests</code>, <code>PersonUpdateHttpTests.P1</code>, new exact-filter HTTP tests), and the README changelog C2 entry.</td></tr>
+<tr><td><strong>Review round</strong> (rev. 3, merged at <code>998036f</code>): <code>fix(api): require a letter or digit in names and hide JSON parser messages</code>, <code>test(api): remove weak tests, strengthen no-echo checks, add review coverage</code></td><td><code>Business/Validation/InputRules.cs</code> (pattern, message, doc comment), <code>Program.cs</code> (<code>AddJsonOptions</code>), <code>README.md</code> (C1 bullet), tests per 8.1 and 8.2 (new <code>ProblemAssert.cs</code>).</td></tr>
 <tr><td><strong>C3</strong> <code>feat(api)!: validated POST /Person with 201 and 409</code></td><td><code>Business/Commands/CreatePerson.cs</code> (rewrite and pre-processor deletion), <code>PersonController.cs</code> (POST action), <code>TestDoubles.cs</code> (shared doubles), new <code>CreatePersonHandlerTests.cs</code>, <code>PersonCreateHttpTests.cs</code> and <code>PersonCreateKestrelTests.cs</code>, and the README changelog C3 entry.</td></tr>
 </table></div>
 <h3>ui (ui-dev), commit set C4 <code>feat(ui): StargateApi.createPerson</code></h3>
@@ -211,10 +224,11 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 <h2>6. Contracts affected</h2>
 <div class="table-wrap"><table>
 <tr><th>Contract</th><th>Change</th><th></th></tr>
-<tr><td>Shared name rule (all 4 endpoints)</td><td>Any non-ASCII character, including accented letters and NBSP or U+3000 at an edge, is now 400. Previously valid names such as <code>Émile</code> are now rejected. The message wording changes.</td><td><span class="tag bad">breaking</span> (non-ASCII input)</td></tr>
+<tr><td>Shared name rule (all 4 endpoints)</td><td>Any non-ASCII character, including accented letters and NBSP or U+3000 at an edge, is now 400. Previously valid names such as <code>&#xC9;mile</code> are now rejected. Rev. 3: a value with no ASCII letter or digit (<code>.</code>, <code>..</code>, <code>'</code>, <code>-</code>) is now 400. The message wording changes.</td><td><span class="tag bad">breaking</span> (non-ASCII input)</td></tr>
 <tr><td><code>GET /Person?name=</code></td><td>Contains becomes exact, case-insensitive and trimmed. A partial name returns an empty list.</td><td><span class="tag bad">breaking</span></td></tr>
 <tr><td><code>GET /Person/{name}</code>, <code>PUT /Person/{personId}</code></td><td>Only the rule change above. NFD input no longer finds or produces NFC names; it is 400.</td><td><span class="tag bad">breaking</span> (non-ASCII only)</td></tr>
 <tr><td><code>POST /Person</code></td><td>Body shape, 201 with <code>Location</code>, 409, 400, 415, 413, and an empty 500 (revision 1, unchanged).</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td>400 body for malformed JSON (POST, PUT)</td><td>Rev. 3: generic messages only; System.Text.Json's text (type names, path, line, byte position) is no longer returned. Status and shape unchanged.</td><td><span class="tag ok">not breaking</span> (messages are not a contract)</td></tr>
 <tr><td><code>CreatePersonResult.id</code></td><td><code>int</code> becomes <code>int?</code>: null on 409.</td><td><span class="tag warn">widened</span></td></tr>
 <tr><td>Schema, migrations, other endpoints</td><td>Unchanged.</td><td><span class="tag ok">none</span></td></tr>
 </table></div>
@@ -231,7 +245,7 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
   </ul></li>
 <li><strong>Rule 2 (no assignment means no astronaut rows).</strong> The create handler adds only a <code>Person</code>. Dumps are compared before and after (H9, P14).</li>
 <li>Rules 3-7 are not touched.</li>
-<li><strong>New input rule (not in the spec)</strong>: names are ASCII. It is enforced in code (<code>InputRules</code>), not in the database (Question 1).</li>
+<li><strong>New input rule (not in the spec)</strong>: names are ASCII and (rev. 3) contain at least one ASCII letter or digit. It is enforced in code (<code>InputRules</code>), not in the database (Question 1).</li>
 </ul>
 
 <h2>8. Tests</h2>
@@ -243,22 +257,22 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 <li>R2: drop <code>Zoë</code> and <code>José</code>.</li>
 <li>R4: add the non-ASCII cases (R4b list in tests.md).</li>
 <li>R11: keep the ASCII rows; add NBSP, U+3000 and U+0085 edges kept as-is.</li>
-<li>R13: becomes "non-ASCII is invalid anywhere" with a representative subset (U+3164, U+200B, U+034F, U+FE0F, U+180E at edges and inside).</li>
+<li>R13: becomes "non-ASCII is invalid anywhere" with a representative subset (U+3164, U+200B, U+034F, U+FE0F, U+180E at edges and inside). <em>Review round: deleted; its rows are in the shared NONASCII list (R4b, X1).</em></li>
 <li>R18: retitle to "after trimming"; body unchanged.</li>
-<li>R19: <code>Renée</code> becomes invalid, <code>Adaㅤ</code> stays invalid, plus the new message.</li>
+<li>R19: <code>Ren&#xE9;e</code> becomes invalid, <code>Ada&lt;U+3164&gt;</code> stays invalid, plus the new message. (Review round: the non-ASCII rows were removed from R19 as duplicates of R4b; R19 now checks <code>null</code>, <code>42</code>, <code>" Ada "</code>, <code>&lt;script&gt;</code> and the exact message.)</li>
 <li>R20: retitle; body unchanged.</li>
-<li>R21: NBSP, EM SPACE, U+3000 and U+0085 edges are not trimmed and are invalid.</li>
+<li>R21: NBSP, EM SPACE, U+3000 and U+0085 edges are not trimmed and are invalid. <em>Review round: deleted; covered by R11's non-ASCII theory and R4b.</em></li>
 </ul></td><td>R1, R2 (100 characters), R3, R12, R17, R18b</td></tr>
 <tr><td><code>UpdatePersonHandlerTests.cs</code></td><td>H4 (NFD stored as NFC), H10 (NFD and non-ASCII case variants)</td><td>
 <ul>
-<li>H13: add <code>Renée</code>, <code>Renée</code> and <code> Ada</code>.</li>
+<li>H13: add <code>Ren&#xE9;e</code>, NFD <code>Rene&lt;U+0301&gt;e</code> and <code>&lt;U+00A0&gt;Ada</code>. (Review round: these three rows were removed again as duplicates of R4b, and a <code>..</code> row was added.)</li>
 <li>H18: retitle to "an overlong name is rejected"; drop the "raw bound / not normalised" comment. 801 and 800 still throw.</li>
 <li>Move the doubles to <code>TestDoubles.cs</code> (C3).</li>
 </ul></td><td>H1-H3, H5-H9, H11-H12b, H14-H17</td></tr>
 <tr><td><code>PersonUpdateHttpTests.cs</code></td><td>(none)</td><td>
 <ul>
 <li>P1: <code>?name=Lindqvist</code> becomes <code>?name=mira%20okafor-lindqvist</code> (C2).</li>
-<li>P13: becomes "non-ASCII is 400 on PUT, the GET filter and GET by name". PUT <code>Renée Ödegaard</code>, <code>?name=Rene%CC%81e</code>, <code>?name=Ada%E3%85%A4</code> and <code>/Person/Jos%C3%A9</code> are each 400.</li>
+<li>P13: becomes "non-ASCII is 400 on PUT, the GET filter and GET by name". PUT <code>Ren&#xE9;e &#xD6;degaard</code>, <code>?name=Rene%CC%81e</code>, <code>?name=Ada%E3%85%A4</code> and <code>/Person/Jos%C3%A9</code> are each 400. <em>Review round: replaced by P20 (a legacy <code>Jos&#xE9;</code> row is listed, not findable by name, and renameable by id), since X1 already covers the 400s.</em></li>
 </ul></td><td>P2-P12, P14-P19. The P6 Unicode rows and P19 stay valid 400 cases.</td></tr>
 <tr><td><code>GetPeopleQueryTests.cs</code></td><td>P11 (non-ASCII case folding; such names can no longer be queried)</td><td>
 <ul>
@@ -270,15 +284,17 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 </ul></td><td>P1, P3, P4, P6, P7b, P8, P10, CancelledToken</td></tr>
 <tr><td><code>PersonHttpTests.cs</code>, <code>GetPersonByNameQueryTests.cs</code>, <code>PersonControllerTests.cs</code>, <code>ResponseShapeTests.cs</code>, <code>NullPersonGuardTests.cs</code>, <code>SeedDataRulesTests.cs</code>, <code>PersonHttpProductionTests.cs</code></td><td>(none)</td><td>(none)</td><td>All. H2 <code>%</code>/<code>_</code> stays 400; H4 <code>x' OR 'a' LIKE 'a</code> is still 200 with an empty list.</td></tr>
 <tr><td><code>PersonNameIndexMigrationTests.cs</code>, <code>MigrationTests.cs</code>, <code>DevelopmentDatabaseInitializerTests.cs</code>, <code>StarbaseDatabaseTests.cs</code></td><td>(none)</td><td>(none)</td><td>All, including M9-M13. The migration's Unicode trim is shipped history.</td></tr>
+<tr><td>Review round (rev. 3), all files</td><td><code>InputRulesTests</code> R13, R21; R25's source-text assertions; <code>GetPeopleQueryTests.F5</code>; <code>CreatePersonHandlerTests.H3</code>; <code>PersonUpdateHttpTests.P13</code>; duplicate non-ASCII rows in R19 and H13</td><td>No-echo assertions in X1, PUT P6 and POST P5 now use <code>ProblemAssert</code> (exact <code>errors.name</code> literal and a scan of the decoded JSON). <code>InvalidNameBodies</code> gains <code>.</code>, <code>..</code>, <code>'</code>, <code>-</code>, <code>. -</code>. H8 and H13 gain <code>..</code>. NONASCII gains three rows.</td><td>Everything else</td></tr>
 </table></div>
 <h3>8.2 New tests</h3>
 <p>The full Given/When/Then list is in <a href="../contracts/006/tests.md">tests.md</a>.</p>
 <ul>
 <li><strong>C1</strong>:
   <ul>
-    <li>R4b: non-ASCII rejection, covering accented, fullwidth, Cyrillic, Greek, emoji, NBSP inside and at edges, U+3000, Kelvin sign, <code>ſ</code>, Arabic-Indic digit, Thai and the combining acute.</li>
-    <li>R25: the pattern source contains neither <code>\d</code>, <code>\p</code> nor <code>IgnoreCase</code> behaviour.</li>
-    <li>X1: the same non-ASCII list returns 400 on every endpoint (GET filter, GET by name, PUT, POST) without echo.</li>
+    <li>R4b: non-ASCII rejection (27 values), covering accented, fullwidth, Cyrillic, Greek, emoji, NBSP inside and at edges, U+3000, Kelvin sign, long s (U+017F), Arabic-Indic and fullwidth digits, Thai and the combining acute.</li>
+    <li>R25: behaviour only (rev. 3 removed the source-text checks): the Kelvin sign and long s are invalid (no <code>IgnoreCase</code>), and U+0663 and U+FF11 are invalid (no <code>\d</code>).</li>
+    <li>X1: the same non-ASCII list returns 400 on every endpoint (GET filter, GET by name, PUT, POST) with exactly the rule message under <code>name</code> and no echo in the decoded JSON.</li>
+    <li>Rev. 3: R27 (punctuation-only values invalid), R28 (100-character punctuation runs are rejected or accepted in linear time), R24 rows <code>a.</code>, <code>A-1</code>, <code>. a</code>, <code>7</code>, and <code>PersonUpdateHttpTests.P20</code> (legacy non-ASCII row).</li>
   </ul></li>
 <li><strong>C2</strong>:
   <ul>
@@ -286,13 +302,15 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
     <li>F2: full name in any ASCII case with padding returns exactly that person.</li>
     <li>F3: combined with <code>rank</code>.</li>
     <li>F4: Swagger description says "exact".</li>
-    <li>F5: a source scan finds no <code>LIKE</code> or <code>EscapeLike</code> in <code>GetPeople.cs</code>, so it cannot come back unnoticed.</li>
+    <li>F5: removed in the review round (a source-text scan, not behaviour; F1 already fails for a contains filter).</li>
+    <li>Rev. 3: F6 (<code>?name=..</code>, <code>?name='</code>, <code>?rank=.</code>, <code>?dutyTitle=-</code> are 400) and F7 (<code>?name=a.</code> is 200 with an empty list).</li>
   </ul></li>
-<li><strong>C3</strong>: the handler, HTTP and Kestrel tests from revision 1, now using ASCII names. The Location test uses <code>Aoife O'Brien-Smith Jr.</code>, giving <code>%20</code> and <code>%27</code>. A new test P17 checks that a GET of <code>Location</code> returns exactly one person, the created one.</li>
+<li><strong>C3</strong>: the handler, HTTP and Kestrel tests from revision 1, now using ASCII names. The Location test uses <code>Aoife O'Brien-Smith Jr.</code>, giving <code>%20</code> and <code>%27</code>. A new test P17 checks that a GET of <code>Location</code> returns exactly one person, the created one. Rev. 3: <code>PersonCreateHttpTests</code> P18 (100-character boundary measured after trimming over POST) and P19 (letter or digit required), <code>M1</code> in both HTTP files (malformed JSON has no parser internals), and <code>PersonControllerTests</code> C6 and C7 (the controller passes the request's CancellationToken to the mediator for POST and PUT). Existing H8b and H11b are now listed in tests.md.</li>
 <li><strong>C4</strong>: UI tests U1-U9, unchanged.</li>
 <li><strong>Mutation targets</strong> (tests.md):
   <ul>
     <li>Use <code>\p{L}</code> or <code>\d</code>, or <code>IgnoreCase</code>.</li>
+    <li>Rev. 3: remove the letter-or-digit lookahead; remove <code>AllowInputFormatterExceptionMessages = false</code>; stop passing the token in the controller.</li>
     <li>Change the trim to <code>Trim()</code> (NBSP accepted).</li>
     <li>Measure length before trimming.</li>
     <li>Restore <code>LIKE</code> contains.</li>
@@ -317,10 +335,12 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
     <li>fullwidth <code>Ａｄａ</code></li>
     <li>Cyrillic <code>Аda</code> (U+0410)</li>
     <li>emoji <code>Ada 🚀</code></li>
-    <li><code> Ada</code> and <code>Ada </code> (NBSP edges)</li>
-    <li><code>　Ada</code></li>
-    <li>NFD <code>Renée</code></li>
+    <li><code>&lt;U+00A0&gt;Ada</code> and <code>Ada&lt;U+00A0&gt;</code> (NBSP edges)</li>
+    <li><code>&lt;U+3000&gt;Ada</code></li>
+    <li>NFD <code>Rene&lt;U+0301&gt;e</code> (sent as <code>Rene%CC%81e</code>)</li>
   </ul></li>
+<li>Punctuation-only names (rev. 3): <code>"."</code>, <code>".."</code>, <code>"'"</code>, <code>"-"</code> and <code>". -"</code> return 400 on POST and PUT, and <code>?name=..</code> and <code>?rank=.</code> return 400 on <code>GET /Person</code>. <code>"a."</code> and <code>"A-1"</code> return 201 on POST.</li>
+<li>Malformed JSON (rev. 3): POST and PUT with <code>[]</code>, <code>{"name":4242}</code>, <code>"Ada"</code> and <code>{"name":"x</code> as <code>application/json</code> return 400, and the body contains no <code>StargateAPI</code>, <code>System.</code>, <code>Path</code>, <code>LineNumber</code> or <code>BytePosition</code>.</li>
 <li>Other invalid names from the PUT list (<code>""</code>, blank, <code>&lt;script&gt;</code>, 101 characters, <code>a\tb</code>) return 400. A 3000-character name returns 400. A body over 4096 bytes returns 413.</li>
 <li>Exact filter:
   <ul>
@@ -336,7 +356,7 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
   <ul>
     <li>The POST shows the request schema and the 201/400/409/415/500 responses.</li>
     <li>The GET <code>name</code> parameter says "exact".</li>
-    <li>The pattern is <code>^[A-Za-z0-9 .'-]+\z</code>.</li>
+    <li>The pattern is <code>^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z</code>.</li>
   </ul></li>
 <li>PUT regression: renaming Mira to <code>Mira Okafor-Lindqvist</code> returns 200, and <code>?name=mira%20okafor-lindqvist</code> finds her.</li>
 </ol>
@@ -365,10 +385,17 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
     <li>Swashbuckle omits the <code>[JsonIgnore]</code> <code>Name</code> from the <code>CreatePersonResult</code> schema. Check: P12. Fallback: build <code>Location</code> from <code>InputRules.Normalize(request.Name)</code> in the controller.</li>
     <li>POST with no body and no Content-Type returns 415. Check: P7c (proven for PUT).</li>
     <li>413 for POST on Kestrel. Check: K3 and QA 6.</li>
-    <li>Swashbuckle emits the new GET <code>pattern</code> string verbatim. Check: F4 asserts that it equals <code>InputRules.AllowedCharactersPattern</code>. Today's H9 checks only that it is present.</li>
+    <li>Swashbuckle emits the new GET <code>pattern</code> string verbatim. Check: F4 asserts that it equals the literal pattern (rev. 3: the new pattern). Today's H9 checks only that it is present.</li>
     <li>Revision 1's "non-ASCII Location" risk is no longer reachable (all non-ASCII is 400), but K1 still checks the exact header on Kestrel.</li>
   </ol></li>
 </ul>
+
+<div class="card bad"><p><strong>Open: not part of this task, not fixed</strong> (recorded in revision 3; the user has not yet decided whether the fix goes into this PR or a separate security task, Question 2)</p>
+<ol>
+<li><strong>Second-order SQL injection through <code>POST /AstronautDuty</code>.</strong> <code>Business/Commands/CreateAstronautDuty.cs:56</code> builds <code>SELECT * FROM [Person] WHERE '{request.Name}' = Name</code> by string interpolation; lines 70 and 100 interpolate <code>person.Id</code> the same way. The registered <code>CreateAstronautDutyPreProcessor</code> first requires a person whose name equals <code>request.Name</code> (EF, parameterised), so an attacker stores the payload as a person name first. The name rule allows apostrophes and spaces, and <code>POST /Person</code> has no authentication, so a name such as <code>a' OR Id IS 3 OR 'a</code> is valid; <code>POST /AstronautDuty</code> with that name then evaluates <code>'a' OR Id IS 3 OR 'a' = Name</code>, loads person 3, and writes a new duty and the current rank and title to person 3. This predates task 006 (before it, <code>POST /Person</code> stored any string); 006 narrows the payload alphabet but does not close the hole. Deferred fix: parameterise the three queries at <code>CreateAstronautDuty.cs:56</code>, <code>:70</code> and <code>:100</code> (Dapper parameters), with an HTTP test that stores the payload name and checks no other person changes.</li>
+<li><strong>Same pattern, not reachable today:</strong> <code>Business/Queries/GetAstronautDutiesByName.cs:28</code> (and <code>:38</code>). <code>AstronautDutyController.GetAstronautDutiesByName</code> currently sends <code>GetPersonByName</code>, so this handler is not called over HTTP; it becomes exploitable when it is wired up. Parameterise it in the same fix.</li>
+<li><strong>No authentication on any write endpoint</strong> (<code>POST /Person</code>, <code>PUT /Person/{personId}</code>, <code>POST /AstronautDuty</code>). <code>Program.cs</code> calls <code>UseAuthorization</code> but configures no scheme or policy. Unchanged by this task; any caller can create and rename people.</li>
+</ol></div>
 
 <h2>10. Interplay with other tasks</h2>
 <div class="card warn"><p><strong>What remains for task 008</strong> after this task (for the user to update 008):</p>
@@ -410,19 +437,23 @@ IsValidName(n)   = 1 &lt;= n.Length &lt;= 100 &amp;&amp; Regex.IsMatch(n, @"^[A-
 
 <h2>12. Contracts</h2>
 <ul>
-<li><a href="../contracts/006/contract.html">contract.html</a>: human summary with the revision 2 note.</li>
+<li><a href="../contracts/006/contract.html">contract.html</a>: human summary with the revision 3 and revision 2 notes and the open issues.</li>
 <li><a href="../contracts/006/openapi.yaml">openapi.yaml</a>: <code>NameRule</code> once; <code>GET /Person</code>, <code>GET /Person/{name}</code>, <code>PUT</code>, <code>POST</code>.</li>
 <li><a href="../contracts/006/data.md">data.md</a>: no schema change; exact C# for the rule, the filter and the POST; rule enforcement; README text.</li>
-<li><a href="../contracts/006/types.ts">types.ts</a>: UI types (unchanged from revision 1 apart from comments).</li>
-<li><a href="../contracts/006/tests.md">tests.md</a>: existing-test changes, new tests and mutation targets.</li>
+<li><a href="../contracts/006/types.ts">types.ts</a>: UI types (unchanged from revision 1 apart from comments; not touched in revision 3).</li>
+<li><a href="../contracts/006/tests.md">tests.md</a>: existing-test changes (final state after the review round), <code>ProblemAssert</code>, new tests and mutation targets.</li>
 </ul>
 
 <h2>13. Questions for the user</h2>
-<p>Revision 1's questions are answered: 1 (<code>Location</code>) is accepted, 2 (look-alikes) is moot, and 3 (500 body) is accepted. One new question:</p>
+<p>Revision 1's questions are answered: 1 (<code>Location</code>) is accepted, 2 (look-alikes) is moot, and 3 (500 body) is accepted. Question 1 below is from revision 2; Question 2 is new in revision 3.</p>
 <ol>
 <li><strong>Existing non-ASCII names in a database.</strong> Rows stored before this change (for example <code>Émile</code>) stay. They are listed by <code>GET /Person</code> and can be renamed by id, but they can't be looked up by name (400). A database <code>CHECK</code> constraint enforcing ASCII would need a migration, and that migration would fail on such rows.
   <ul>
-    <li><em>Recommendation:</em> no data migration and no <code>CHECK</code> constraint. The API is pre-release, the only databases are development ones that reseed with ASCII names, and the rule is input validation, not a spec domain rule. If a real deployment ever holds such rows, rename them by id.</li>
+    <li><em>Recommendation:</em> no data migration and no <code>CHECK</code> constraint. The API is pre-release, the only databases are development ones that reseed with ASCII names, and the rule is input validation, not a spec domain rule. If a real deployment ever holds such rows, rename them by id. The same applies to legacy punctuation-only names (rev. 3).</li>
+  </ul></li>
+<li><strong>Where does the SQL injection fix go?</strong> (section 9, "Open"). Option A: add it to this PR as a separate commit (parameterise <code>CreateAstronautDuty.cs:56/70/100</code> and <code>GetAstronautDutiesByName.cs:28/38</code>, plus one HTTP test); small, and it closes a hole that this task's <code>POST /Person</code> keeps reachable. Option B: a separate security task, keeping 006's scope as approved.
+  <ul>
+    <li><em>Recommendation:</em> Option A only if the reviewers accept scope growth; otherwise Option B, scheduled before any deployment. Authentication is a separate, larger task either way.</li>
   </ul></li>
 </ol>
 </main>

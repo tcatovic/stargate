@@ -1,4 +1,12 @@
-# Contract for task 006. Revision 2.
+# Contract for task 006. Revision 3.
+# Revision 3 changes (after the review round, implementation merged at 998036f):
+#   - NameRule now also requires at least one ASCII letter or digit. Punctuation-only names (".", "..", "'", "-",
+#     ". -") are 400 on all four endpoints, because ".." breaks the UI's URL building (/api/Person/.. resolves
+#     to /api/). New pattern ^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z and new message text (see ValidationFailed).
+#   - Malformed JSON bodies on POST and PUT are 400 with generic messages only (AllowInputFormatterExceptionMessages
+#     = false): never .NET type names, JSON paths inside messages, line numbers or byte positions.
+#   - ValidationFailed now states the exact message set for the `name` key.
+#   - info.description records that no endpoint has authentication (unchanged by this task).
 # Revision 2 changes:
 #   - NameRule replaces NamePattern. Names are ASCII-only, with an ASCII-whitespace trim.
 #   - The 800-character raw bound is gone.
@@ -11,13 +19,16 @@
 # JSON is camelCase. Every property under `required` is always present; nullability is explicit; property order is
 # not significant.
 # BREAKING vs main:
-#   - Non-ASCII names are 400 on all four endpoints.
+#   - Non-ASCII names and punctuation-only names are 400 on all four endpoints.
 #   - GET /Person?name= is exact, no longer contains.
 #   - POST /Person: body shape, 201, 409, 400, and an empty 500 body.
 openapi: 3.0.3
 info:
   title: Stargate ACTS API - task 006 contract
-  version: "006-r2"
+  version: "006-r3"
+  description: >
+    No endpoint has authentication or authorisation (unchanged by this task; Program.cs calls UseAuthorization
+    but no scheme or policy is configured). Any caller can create and rename people.
 paths:
   /Person:
     get:
@@ -28,8 +39,9 @@ paths:
         CHANGED (rev. 2): `name` is a case-insensitive EXACT match on the full stored name (no contains, no
         wildcards). `rank` and `dutyTitle` are unchanged (case-insensitive exact on current values). Filters AND
         together; an omitted, empty or whitespace-only value means no filter. A value that fails NameRule as sent
-        (including any non-ASCII character, or a tab/newline at an edge) is 400. No match is 200 with an empty
-        `people` list. Response shape unchanged from contract 001.
+        (including any non-ASCII character, a tab/newline at an edge, or (rev. 3) a value with no ASCII letter or
+        digit such as "..", "'", "." or "-") is 400. No match is 200 with an empty `people` list. Response shape
+        unchanged from contract 001.
       parameters:
         - name: name
           in: query
@@ -59,6 +71,7 @@ paths:
         NameRule. Names are unique ignoring ASCII case (SQLite NOCASE); a taken name is 409, whether detected by the
         pre-check or by the database unique index (concurrent creates). Order of checks: 415 (content type) and 413
         (size), then 400 (body and NameRule), then 409. Not idempotent: repeating a successful request returns 409.
+        No authentication.
       requestBody:
         required: true
         description: >
@@ -115,9 +128,9 @@ paths:
       tags: [Person]
       summary: Get one person by exact name (case-insensitive)
       description: >
-        CHANGED (rev. 2) only in the rule: the route value must satisfy NameRule as sent (1..100, the ASCII set);
-        any non-ASCII character is 400. Everything else unchanged from contract 001 (200 / 404 envelope). Task 008
-        removes this endpoint.
+        CHANGED (rev. 2, rev. 3) only in the rule: the route value must satisfy NameRule as sent (1..100, the ASCII
+        set, at least one ASCII letter or digit); any non-ASCII character is 400. Everything else unchanged from
+        contract 001 (200 / 404 envelope). Task 008 removes this endpoint.
       parameters:
         - name: name
           in: path
@@ -135,9 +148,11 @@ paths:
       tags: [Person]
       summary: Rename a person
       description: >
-        CHANGED (rev. 2) only in the rule: `name` follows NameRule (ASCII-only; trimmed of ASCII whitespace; no NFC;
-        no 800-character raw bound). Non-ASCII names, including NFD input and NBSP/U+3000 at an edge, are 400.
-        Everything else (200/404/409/413/415, envelopes, idempotency, order of checks) unchanged from contract 002.
+        CHANGED (rev. 2, rev. 3) only in the rule and in malformed-JSON messages: `name` follows NameRule (ASCII-only;
+        trimmed of ASCII whitespace; at least one ASCII letter or digit; no NFC; no 800-character raw bound).
+        Non-ASCII names, including NFD input and NBSP/U+3000 at an edge, and punctuation-only names are 400. A
+        malformed JSON body is 400 with generic messages only (see ValidationFailed). Everything else
+        (200/404/409/413/415, envelopes, idempotency, order of checks) unchanged from contract 002. No authentication.
       responses:
         "200": { description: Unchanged (UpdatePersonResult). }
         "400": { $ref: "#/components/responses/ValidationFailed" }
@@ -152,22 +167,47 @@ components:
     ValidationFailed:
       description: >
         Invalid input from [ApiController] model validation, before any handler runs. Causes include the following.
-        Body-shape causes, for PUT and POST: an empty body, a non-object body (for example a bare string), or
-        malformed JSON. Name causes: `name` missing, null or not a string, or failing NameRule. Route causes:
-        personId invalid (PUT).
-        `errors` keys are not to be branched on. Messages never contain the submitted value. The NameRule message
-        is "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods (at most 100
-        characters)." It is for display only; clients must not parse it.
+        Body-shape causes, for PUT and POST: an empty body, a non-object body (for example a bare string or `[]`),
+        a wrong JSON type for `name` (for example a number), or truncated/malformed JSON. Name causes: `name`
+        missing, null, blank, or failing NameRule. Route causes: personId invalid (PUT).
+        `errors` keys are not to be branched on. Messages never contain the submitted value, and are for display
+        only; clients must not parse them.
+        Name messages (rev. 3, exact text). The NameRule message is "Use only English letters (A-Z), digits,
+        spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)."
+        For a POST/PUT body, the `name` entry (key compared ignoring case) is exactly one of these lists:
+        a non-blank string failing NameRule gives [NameRule message]; a missing or null `name` gives
+        ["The Name field is required."]; an empty or whitespace-only string gives ["The Name field is required.",
+        NameRule message], in that order. GET filters and the GET route use the same NameRule message under the
+        parameter's key.
+        Body-shape messages (rev. 3): System.Text.Json parser messages are suppressed
+        (AllowInputFormatterExceptionMessages = false). A body that cannot be read as the request object gives 400
+        with one or more `errors` entries whose keys are framework paths (for example "$" or "$.name", and
+        "request" for the missing body object) and whose messages are generic fixed text such as "The input was not
+        valid." and "The request field is required.". No message contains a .NET type or namespace name
+        (StargateAPI..., System...), the words Path, LineNumber or BytePosition, or "could not be converted".
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/ValidationProblemDetails" }
-          example:
-            type: https://tools.ietf.org/html/rfc9110#section-15.5.1
-            title: One or more validation errors occurred.
-            status: 400
-            errors:
-              Name: ["Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods (at most 100 characters)."]
-            traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
+          examples:
+            nameRule:
+              summary: A name that fails NameRule (for example "..", "Jos<U+00E9>" or "<script>")
+              value:
+                type: https://tools.ietf.org/html/rfc9110#section-15.5.1
+                title: One or more validation errors occurred.
+                status: 400
+                errors:
+                  name: ["Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)."]
+                traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
+            malformedJson:
+              summary: A body of [] (illustrative keys; the guarantee is generic messages only)
+              value:
+                type: https://tools.ietf.org/html/rfc9110#section-15.5.1
+                title: One or more validation errors occurred.
+                status: 400
+                errors:
+                  $: ["The input was not valid."]
+                  request: ["The request field is required."]
+                traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
     ServerError:
       description: >
         Unexpected fault. Production: empty body (logged by the host). Development: developer exception page. Never a
@@ -176,27 +216,30 @@ components:
   schemas:
     NameRule:
       description: >
-        THE shared name rule (rev. 2), used by POST and PUT `name`, and on its raw form by the GET filters and route.
+        THE shared name rule (rev. 3), used by POST and PUT `name`, and on its raw form by the GET filters and route.
         Writes (POST, PUT): the value is trimmed of ASCII whitespace only (U+0009-U+000D, U+0020). Non-ASCII
         whitespace (NBSP U+00A0, U+0085, U+2000-U+200A, U+3000, ...) is NOT trimmed and is therefore invalid. The
-        result must be 1..100 characters, each one of A-Z a-z 0-9 space . ' - (ASCII apostrophe U+0027 only).
+        result must be 1..100 characters, each one of A-Z a-z 0-9 space . ' - (ASCII apostrophe U+0027 only), and
+        (rev. 3) must contain at least one ASCII letter or digit, so ".", "..", "'", "-" and ". -" are invalid while
+        "a.", "A-1", "7" and ". a" are valid.
         Any other character anywhere is 400: accented letters, other scripts, fullwidth forms, emoji, typographic
         quotes, combining marks, control characters. No Unicode normalisation is performed.
         Uniqueness and lookups compare ignoring ASCII case (SQLite NOCASE).
         Reads (GET filters, GET route): the value AS SENT must match the pattern and be at most 100 characters, so
         an edge tab or newline is 400 there; the handler then trims ASCII spaces. Whitespace-only filter values mean
         no filter.
-        .NET pattern (no RegexOptions.IgnoreCase; \z, not $).
+        .NET pattern (no RegexOptions.IgnoreCase; no \d; \z, not $). The lookahead scans only allowed punctuation up
+        to the first letter or digit, so matching is linear in the input length.
       type: string
       minLength: 1
       maxLength: 100
-      pattern: "^[A-Za-z0-9 .'-]+\\z"
+      pattern: "^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\\z"
 
     NameFilter:
       description: NameRule as applied to a raw GET value (maxLength 100, same pattern).
       type: string
       maxLength: 100
-      pattern: "^[A-Za-z0-9 .'-]+\\z"
+      pattern: "^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\\z"
 
     CreatePersonRequest:
       type: object
@@ -206,7 +249,9 @@ components:
         name:
           type: string
           nullable: false
-          description: Follows NameRule (trimmed of ASCII whitespace, then 1..100 ASCII characters of the allowed set).
+          description: >
+            Follows NameRule (trimmed of ASCII whitespace, then 1..100 ASCII characters of the allowed set with at
+            least one letter or digit).
 
     BaseResponse:
       type: object
@@ -246,6 +291,7 @@ components:
         errors:
           type: object
           nullable: false
+          minProperties: 1
           additionalProperties: { type: array, items: { type: string } }
         traceId: { type: string, nullable: false }
 

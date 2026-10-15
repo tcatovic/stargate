@@ -1,6 +1,13 @@
-# Task 006: data contract (revision 2)
+# Task 006: data contract (revision 3)
 
-Markdown because agents read and edit it as text. Baseline: `main` at `f42dc41`.
+Markdown because agents read and edit it as text. Baseline: `main` at `f42dc41`. Implementation merged at `998036f`.
+
+Revision 3 changes (the review round after revision 2; this file now matches the merged code):
+- Shared name rule: a name must also contain at least one ASCII letter or digit. Punctuation-only values (`.`, `..`, `'`, `-`, `. -`) are invalid, because `..` breaks the UI's URL building (`/api/Person/..` resolves to `/api/`). New `AllowedCharactersPattern` and `AllowedCharactersMessage`, and the class doc comment (listing below). Behaviour table: punctuation rows added; invisible characters are now written as `<U+XXXX>`.
+- New section "Malformed JSON messages (`Program.cs`)": `AllowInputFormatterExceptionMessages = false`.
+- "How each rule is enforced": test IDs updated (R21 deleted, R27, R28, P19, F6 added).
+- README text: the C1 bullet now matches the merged README (letter-or-digit rule and parser messages).
+- Open issue, not part of this task: see the plan and `contract.html` ("Open: not part of this task, not fixed"). It is not repeated here because it changes no data or code in this contract.
 
 Revision 2 changes:
 - Section "Shared name rule" is rewritten: names are ASCII-only, NFC and the invisible set are removed, and so is the raw bound.
@@ -27,7 +34,8 @@ This replaces the whole class body. The public names `MaxLength`, `AllowedCharac
 /// <summary>
 /// Shared bounds for free-text identifiers (person name, rank, duty title), defined once for every endpoint.
 /// Names are ASCII-only: <see cref="Normalize"/> trims ASCII whitespace, then a value must be 1 to
-/// <see cref="MaxLength"/> characters of A-Z, a-z, 0-9, space, period, apostrophe and hyphen.
+/// <see cref="MaxLength"/> characters of A-Z, a-z, 0-9, space, period, apostrophe and hyphen, with at least one
+/// ASCII letter or digit (so ".", ".." and "'" are not names; ".." would also break URL building).
 /// No Unicode normalisation: any non-ASCII character, including non-ASCII whitespace at an edge, is invalid.
 /// </summary>
 public static class InputRules
@@ -36,10 +44,11 @@ public static class InputRules
 
     // Written out (never \d or \p{L}, which match non-ASCII digits and letters) and used WITHOUT
     // RegexOptions.IgnoreCase (under which U+212A KELVIN SIGN matches k). \z, not $, so a trailing newline never matches.
-    public const string AllowedCharactersPattern = @"^[A-Za-z0-9 .'-]+\z";
+    // The lookahead scans only the allowed punctuation up to the first letter or digit, so matching stays linear.
+    public const string AllowedCharactersPattern = @"^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z";
 
     public const string AllowedCharactersMessage =
-        "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods (at most 100 characters).";
+        "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters).";
 
     // Tab, LF, VT, FF, CR, space. Deliberately not string.Trim()'s Unicode set: a non-ASCII character is never
     // silently removed, so it reaches IsValidName and is rejected.
@@ -105,13 +114,29 @@ In the `EndpointDescription`, replace "The name is NFC-normalised and trimmed, t
 | --- | --- | --- |
 | `"  Ada \t"`, `"\r\nAda\r\n"` | `"Ada"` | yes |
 | `"Tomas  Lindqvist"` | unchanged (inner spaces kept) | yes |
-| 3 spaces + 100 letters + 3 spaces | 100 letters | yes |
+| 3 spaces + 100 letters + 3 spaces, or 5000 spaces + `Ada` | 100 letters, `Ada` | yes |
 | 101 letters | unchanged | no |
 | `""`, `"   "`, `"\t"` | `""` | no |
-| `" Ada"`, `"Ada　"`, `"\u0085Ada"`, `"Ada "` | unchanged | **no** |
-| `"Zoë"`, `"José"`, `"Émile"`, `"Renée"`, `"Ａｄａ"`, `"Аda"` (U+0410), `"Ada 🚀"`, `"O’Brien"` (U+2019), `"Kate"` (Kelvin), `"ſam"`, `"٣"`, `"Ada​"`, `"Adaㅤ"` | unchanged | **no** |
+| `"<U+00A0>Ada"`, `"Ada<U+3000>"`, `"<U+0085>Ada"`, `"Ada<U+2003>"` (non-ASCII whitespace at an edge) | unchanged | **no** |
+| `"Zo\u00EB"`, `"Jos\u00E9"`, `"\u00C9mile"`, `"Ren\u00E9e"`, `"Rene\u0301e"` (NFD), `"\uFF21da"`, `"\u0410da"` (Cyrillic A), `"Ada \U0001F680"`, `"O\u2019Brien"`, `"\u212Aate"` (Kelvin sign), `"\u017Fam"` (long s), `"\u0663"`, `"\uFF11"`, `"Ada\u200B"`, `"Ada\u3164"` (C# escapes; the full list is `NonAsciiNames.All` in tests.md) | unchanged | **no** |
 | `"a\tb"`, `"Ada\n"` (raw pattern), `"<script>"`, `"%"`, `"_"`, `"a;b"` | (inner unchanged) | no |
+| `"."`, `".."`, `"'"`, `"-"`, `". -"`, `" ' . - "`, 100 periods (no ASCII letter or digit; rev. 3) | trimmed | **no** |
+| `"a."`, `"A-1"`, `". a"`, `"7"`, 99 hyphens + `"a"` (rev. 3) | unchanged | yes |
 | `"O'Brien-Smith Jr."`, `"2LT"`, `"RETIRED"`, every seed name, rank and title | unchanged | yes |
+
+## Malformed JSON messages (review round, rev. 3): `exercise1/api/Program.cs`
+
+`AddControllers(...)` is followed by:
+
+```csharp
+.AddJsonOptions(options =>
+{
+    // Malformed-JSON 400s must not carry System.Text.Json's message (CLR type names, JSON path, line and byte position).
+    options.AllowInputFormatterExceptionMessages = false;
+});
+```
+
+Effect on `POST /Person` and `PUT /Person/{personId}` (and any other `[FromBody]` action): a body that System.Text.Json cannot read as the request type (`[]`, `"Ada"`, `{"name":4242}`, `{"name":"Tokenxyz`, `{"name":`) is still 400 `ValidationProblemDetails` with a non-empty `errors` object, but every message is generic framework text, for example `{"$":["The input was not valid."],"request":["The request field is required."]}` or an entry under `$.name`. No key or message contains `StargateAPI`, `System.`, `Path`, `LineNumber`, `BytePosition` or `converted` (tests `PersonCreateHttpTests.M1`, `PersonUpdateHttpTests.M1`). The keys are framework model-state paths; clients must not parse keys or messages. No other behaviour changes; no schema change.
 
 ## Exact name filter (commit set C2): `exercise1/api/Business/Queries/GetPeople.cs`
 
@@ -221,17 +246,18 @@ Remove `using System.Net;` from the controller if it becomes unused.
 
 | Rule | Code | Database | Tests |
 | --- | --- | --- | --- |
-| 1. A Person is uniquely identified by Name | `[ValidName]`. The handler trims ASCII whitespace and runs the ASCII rule, then a NOCASE pre-check (409). Lookup by name is exact NOCASE | Unique index `IX_Person_Name` on the `COLLATE NOCASE` column. With ASCII-only names, NOCASE equality is complete case-insensitivity. A lost race maps to 409 | H4, H5, H6, H7, P4, P11, P15, F1-F3 |
+| 1. A Person is uniquely identified by Name | `[ValidName]`. The handler trims ASCII whitespace and runs the ASCII rule, then a NOCASE pre-check (409). Lookup by name is exact NOCASE | Unique index `IX_Person_Name` on the `COLLATE NOCASE` column. With ASCII-only names, NOCASE equality is complete case-insensitivity. A lost race maps to 409 | H4, H5, H6, H7, P4, P11, P15, F1-F3, P20 (update) |
 | 2. No assignment means no AstronautDetail or AstronautDuty rows | The create handler adds only `Person` | FKs (unchanged) | H9, P14 |
-| Input: names are ASCII (not a spec rule) | `InputRules` on every endpoint | none (by decision; plan Question 1) | R4b, R11, R21, R25, X1 |
+| Input: names are ASCII (not a spec rule) | `InputRules` on every endpoint | none (by decision; plan Question 1) | R4b, R11, R25, X1 (both files) |
+| Input: a name has at least one ASCII letter or digit (rev. 3; not a spec rule) | The lookahead in `AllowedCharactersPattern`, shared by every endpoint | none | R24, R27, R28, create P19, F6, F7, H8 and H13 (`..` row), P5/P6 of PUT and POST (`InvalidNameBodies`) |
 
 ## README (`exercise1/api/README.md`, "Changelog (breaking changes)")
 
-Insert these three bullets at the top, in this order. Each one is added by its own commit set.
+Insert these three bullets at the top, in this order. Each one is added by its own commit set. The C1 bullet is quoted as merged after the review round (rev. 3 added the letter-or-digit sentence and the malformed-JSON sentence).
 
 > - Task 006 (BREAKING, C3): `POST /Person` takes a JSON object `{ "name": "..." }` (Content-Type `application/json`, body at most 4096 bytes). A bare JSON string is no longer accepted: 400 with `application/json`, 415 otherwise. Success is now **201 Created** (was 200) with body `{ id, success, message, responseCode }` (`responseCode` 201) and `Location: /Person?name=<URL-encoded stored name>`, which returns exactly that person. Invalid names are 400 (the value is never echoed). A name equal to an existing one ignoring ASCII case and surrounding whitespace is **409** `{ id: null, success: false, message: "A person with this name already exists", responseCode: 409 }`, including concurrent creates (never a 500, never two rows). 415 for a non-JSON content type, 413 for a larger body. Unexpected errors return 500 with no exception text (empty body in Production). A new person has no astronaut records.
 > - Task 006 (BREAKING, C2): `GET /Person?name=` is now a case-insensitive **exact** match on the full name (it was a contains match). `?name=ra` and `?name=elena` now return an empty list; `?name=elena%20vasquez` returns Elena Vasquez. `rank` and `dutyTitle` are unchanged.
-> - Task 006 (BREAKING, C1): person names (and the `name`, `rank` and `dutyTitle` values checked by the same rule) are **ASCII-only**: letters A-Z and a-z, digits, space, hyphen, apostrophe and period, 1 to 100 characters after trimming. Any other character returns 400 on `GET /Person`, `GET /Person/{name}`, `PUT /Person/{personId}` and `POST /Person`. That includes accented letters such as `Émile`, which were valid before, NFD input, and non-ASCII whitespace such as a no-break space, even at the start or end. Only ASCII whitespace (space, tab, CR, LF) is trimmed. Names are no longer NFC-normalised. The validation message now reads "Use only English letters (A-Z), digits, ...". Names already stored with non-ASCII characters remain and are listed, but cannot be looked up by name; rename them by id.
+> - Task 006 (BREAKING, C1): person names (and the `name`, `rank` and `dutyTitle` values checked by the same rule) are **ASCII-only**: letters A-Z and a-z, digits, space, hyphen, apostrophe and period, 1 to 100 characters after trimming, with at least one letter or digit (so `.`, `..`, `'` and `-` alone are rejected). Any other character returns 400 on `GET /Person`, `GET /Person/{name}`, `PUT /Person/{personId}` and `POST /Person`. That includes accented letters such as `Émile`, which were valid before, NFD input, and non-ASCII whitespace such as a no-break space, even at the start or end. Only ASCII whitespace (space, tab, CR, LF) is trimmed. Names are no longer NFC-normalised. The validation message now reads "Use only English letters (A-Z), digits, ...". Malformed JSON bodies (for example a bare string, `[]`, a number for `name`, truncated JSON) still return 400, but the body no longer carries the JSON parser's message (CLR type names, JSON path, line and byte position). Names already stored with non-ASCII characters remain and are listed, but cannot be looked up by name; rename them by id.
 
 Append these sentences to existing bullets:
 - The bullet starting "Task 002 (BEHAVIOUR CHANGE, interim until task 006)" gets: " Superseded by task 006: duplicates are now 409 and names are trimmed."

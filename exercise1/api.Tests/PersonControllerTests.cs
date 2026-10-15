@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using StargateAPI.Business.Commands;
 using StargateAPI.Business.Data;
 using StargateAPI.Business.Queries;
 using StargateAPI.Controllers;
@@ -87,5 +88,59 @@ public class PersonControllerTests
 
         await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPeople(null, null, null, CancellationToken.None)));
         await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPersonByName("x", CancellationToken.None)));
+    }
+
+    private sealed class CapturingMediator : IMediator
+    {
+        public CancellationToken? Token { get; private set; }
+
+        public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
+        {
+            Token = cancellationToken;
+            object result = request switch
+            {
+                CreatePerson => new CreatePersonResult { Id = 1, Name = "Ada", ResponseCode = 201 },
+                UpdatePerson => new UpdatePersonResult(),
+                _ => throw new NotSupportedException(),
+            };
+            return Task.FromResult((TResponse)result);
+        }
+
+        public Task Send<TRequest>(TRequest request, CancellationToken cancellationToken = default) where TRequest : IRequest =>
+            throw new NotSupportedException();
+
+        public Task<object?> Send(object request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public IAsyncEnumerable<TResponse> CreateStream<TResponse>(IStreamRequest<TResponse> request, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public IAsyncEnumerable<object?> CreateStream(object request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task Publish<TNotification>(TNotification notification, CancellationToken cancellationToken = default) where TNotification : INotification =>
+            throw new NotSupportedException();
+
+        public Task Publish(object notification, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task C6_CreatePerson_PassesTheRequestsCancellationTokenToTheMediator()
+    {
+        using var cts = new CancellationTokenSource();
+        var mediator = new CapturingMediator();
+
+        await new PersonController(mediator).CreatePerson(new CreatePersonRequest { Name = "Ada" }, cts.Token);
+
+        Assert.Equal(cts.Token, mediator.Token);
+    }
+
+    [Fact]
+    public async Task C7_UpdatePerson_PassesTheRequestsCancellationTokenToTheMediator()
+    {
+        using var cts = new CancellationTokenSource();
+        var mediator = new CapturingMediator();
+
+        await new PersonController(mediator).UpdatePerson(1, new UpdatePersonRequest { Name = "Ada" }, cts.Token);
+
+        Assert.Equal(cts.Token, mediator.Token);
     }
 }

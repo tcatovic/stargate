@@ -186,6 +186,11 @@ public sealed class PersonUpdateHttpTests : IDisposable
         NameJson("x' OR '1'='1"),
         NameJson("Robert'); DROP TABLE Person;--"),
         NameJson("a\tb"),
+        NameJson("."),
+        NameJson(".."),
+        NameJson("'"),
+        NameJson("-"),
+        NameJson(". -"),
         NameJson("Ada\u3164"),
         NameJson("\u0301Ada"),
         NameJson("Ada\u200B"),
@@ -206,16 +211,7 @@ public sealed class PersonUpdateHttpTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Equal(400, json.GetProperty("status").GetInt32());
-        var errors = json.GetProperty("errors");
-        Assert.NotEmpty(errors.EnumerateObject());
-        Assert.Contains(errors.EnumerateObject(), e => e.Name.Equals("name", StringComparison.OrdinalIgnoreCase));
-        using (var submitted = JsonDocument.Parse(body))
-        {
-            if (submitted.RootElement.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && name.GetString()!.Trim().Length > 0)
-            {
-                Assert.DoesNotContain(name.GetString()!, text);
-            }
-        }
+        ProblemAssert.NameRejected(json, body);
         Assert.Equal(before, _db.Dump());
     }
 
@@ -242,6 +238,25 @@ public sealed class PersonUpdateHttpTests : IDisposable
         }
         // The framework-defined error keys are not pinned (clients must not branch on them), but none may carry the body.
         Assert.DoesNotContain("\"name\":", text);
+        Assert.Equal(before, _db.Dump());
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"name\":4242}")]
+    [InlineData("\"Ada\"")]
+    [InlineData("{\"name\":\"Tokenxyz")]
+    [InlineData("{\"name\":")]
+    public async Task M1_MalformedJson_Is400_WithoutParserInternals(string body)
+    {
+        var before = _db.Dump();
+
+        var (status, _, json) = await Send(HttpMethod.Put, $"/Person/{IdOf("Mira Okafor")}", body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.Equal(400, json.GetProperty("status").GetInt32());
+        Assert.NotEmpty(json.GetProperty("errors").EnumerateObject());
+        ProblemAssert.NoParserInternals(json);
         Assert.Equal(before, _db.Dump());
     }
 
@@ -412,24 +427,22 @@ public sealed class PersonUpdateHttpTests : IDisposable
     }
 
     [Fact]
-    public async Task P13_NonAsciiIsRejectedOnPutAndOnTheReadSide()
+    public async Task P20_ALegacyNonAsciiRow_IsListedAndRenameableById_ButNotFindableByName()
     {
-        var mira = IdOf("Mira Okafor");
-        var before = _db.Dump();
+        _db.Execute("INSERT INTO \"Person\" (\"Name\") VALUES ('Jos\u00E9')");
+        var legacy = IdOf("Jos\u00E9");
 
-        var (put, putText, _) = await Put(mira, "Ren\u00E9e \u00D6degaard");
-        var (filter, filterText, _) = await Get("/Person?name=Rene%CC%81e");
-        var (invisible, _, _) = await Get("/Person?name=Ada%E3%85%A4");
-        var (byName, byNameText, _) = await Get("/Person/Jos%C3%A9");
+        var (filterStatus, _, _) = await Get("/Person?name=Jos%C3%A9");
+        var (_, _, list) = await Get("/Person");
+        Assert.Equal(HttpStatusCode.BadRequest, filterStatus);
+        Assert.Contains("Jos\u00E9", Names(list));
 
-        Assert.Equal(HttpStatusCode.BadRequest, put);
-        Assert.Equal(HttpStatusCode.BadRequest, filter);
-        Assert.Equal(HttpStatusCode.BadRequest, invisible);
-        Assert.Equal(HttpStatusCode.BadRequest, byName);
-        Assert.DoesNotContain("gaard", putText);
-        Assert.DoesNotContain("Rene", filterText);
-        Assert.DoesNotContain("Jos", byNameText);
-        Assert.Equal(before, _db.Dump());
+        var (putStatus, _, put) = await Put(legacy, "Jose");
+
+        Assert.Equal(HttpStatusCode.OK, putStatus);
+        Assert.Equal("Jose", put.GetProperty("person").GetProperty("name").GetString());
+        var (_, _, after) = await Get("/Person?name=jose");
+        Assert.Equal(new[] { "Jose" }, Names(after));
     }
 
     [Fact]

@@ -5,7 +5,8 @@ namespace StargateAPI.Business.Validation
     /// <summary>
     /// Shared bounds for free-text identifiers (person name, rank, duty title), defined once for every endpoint.
     /// Names are ASCII-only: <see cref="Normalize"/> trims ASCII whitespace, then a value must be 1 to
-    /// <see cref="MaxLength"/> characters of A-Z, a-z, 0-9, space, period, apostrophe and hyphen.
+    /// <see cref="MaxLength"/> characters of A-Z, a-z, 0-9, space, period, apostrophe and hyphen, with at least one
+    /// ASCII letter or digit (so ".", ".." and "'" are not names; ".." would also break URL building).
     /// No Unicode normalisation: any non-ASCII character, including non-ASCII whitespace at an edge, is invalid.
     /// </summary>
     public static class InputRules
@@ -14,10 +15,11 @@ namespace StargateAPI.Business.Validation
 
         // Written out (never \d or \p{L}, which match non-ASCII digits and letters) and used WITHOUT
         // RegexOptions.IgnoreCase (under which U+212A KELVIN SIGN matches k). \z, not $, so a trailing newline never matches.
-        public const string AllowedCharactersPattern = @"^[A-Za-z0-9 .'-]+\z";
+        // The lookahead scans only the allowed punctuation up to the first letter or digit, so matching stays linear.
+        public const string AllowedCharactersPattern = @"^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z";
 
         public const string AllowedCharactersMessage =
-            "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods (at most 100 characters).";
+            "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters).";
 
         // Tab, LF, VT, FF, CR, space. Deliberately not string.Trim()'s Unicode set: a non-ASCII character is never
         // silently removed, so it reaches IsValidName and is rejected.

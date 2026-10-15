@@ -16,6 +16,10 @@ builder.Services.AddControllers(options =>
     // Parameters (a route value such as personId) use the "non-property" variants, which are the ones that echo.
     messages.SetNonPropertyAttemptedValueIsInvalidAccessor(_ => "The value is not valid.");
     messages.SetNonPropertyValueMustBeANumberAccessor(() => "The value must be a number.");
+}).AddJsonOptions(options =>
+{
+    // Malformed-JSON 400s must not carry System.Text.Json's message (CLR type names, JSON path, line and byte position).
+    options.AllowInputFormatterExceptionMessages = false;
 });
 // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
 builder.Services.AddEndpointsApiExplorer();

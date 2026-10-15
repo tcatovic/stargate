@@ -32,7 +32,7 @@ public class PersonControllerTests
     {
         using var db = PeopleFixture.Create();
 
-        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPeople(null, null, null, CancellationToken.None)));
+        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPeople(new GetPeople(), CancellationToken.None)));
 
         var body = Assert.IsType<GetPeopleResult>(result.Value);
         Assert.Equal(200, result.StatusCode);
@@ -46,9 +46,9 @@ public class PersonControllerTests
         using var db = PeopleFixture.Create();
 
         var byName = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
-            await WithController(db, c => c.GetPeople("priya raman", null, null, CancellationToken.None))).Value);
+            await WithController(db, c => c.GetPeople(new GetPeople { Name = "priya raman" }, CancellationToken.None))).Value);
         var combined = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
-            await WithController(db, c => c.GetPeople(null, "maj", "commander", CancellationToken.None))).Value);
+            await WithController(db, c => c.GetPeople(new GetPeople { Rank = "maj", DutyTitle = "commander" }, CancellationToken.None))).Value);
 
         Assert.Equal(["Priya Raman"], byName.People.Select(p => p.Name));
         Assert.Equal(["Elena Vasquez"], combined.People.Select(p => p.Name));
@@ -86,7 +86,7 @@ public class PersonControllerTests
     {
         using var db = new TestDatabase(); // not migrated: no tables
 
-        await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPeople(null, null, null, CancellationToken.None)));
+        await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPeople(new GetPeople(), CancellationToken.None)));
         await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPersonByName("x", CancellationToken.None)));
     }
 

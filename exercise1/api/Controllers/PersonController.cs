@@ -22,7 +22,8 @@ namespace StargateAPI.Controllers
         [HttpGet("")]
         [EndpointSummary("List people, optionally filtered by name, current rank and current duty title")]
         [EndpointDescription("Filters combine with AND; an omitted, empty or whitespace-only filter does not filter. "
-            + "Values are trimmed. name, rank and dutyTitle are case-insensitive exact matches (name on the full name; rank and dutyTitle "
+            + "Surrounding ASCII whitespace is removed from each value, then the value is validated against the shared name rule. "
+            + "name, rank and dutyTitle are case-insensitive exact matches (name on the full name; rank and dutyTitle "
             + "on the current AstronautDetail values). People with no astronaut assignment are listed when no rank or "
             + "dutyTitle filter is given and are never matched by one. Case-insensitivity folds ASCII letters only. "
             + "Order is unspecified; no paging.")]
@@ -30,20 +31,12 @@ namespace StargateAPI.Controllers
         [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
         [ProducesResponseType(StatusCodes.Status500InternalServerError)]
         public async Task<IActionResult> GetPeople(
-            [FromQuery, StringLength(InputRules.MaxLength), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
-                Description("Case-insensitive exact match on the person's full name. Empty or whitespace-only means no filter.")] string? name,
-            [FromQuery, StringLength(InputRules.MaxLength), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
-                Description("Case-insensitive exact match on the current rank (e.g. MAJ). Excludes people with no assignment.")] string? rank,
-            [FromQuery, StringLength(InputRules.MaxLength), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
-                Description("Case-insensitive exact match on the current duty title (e.g. Commander, RETIRED). Excludes people with no assignment.")] string? dutyTitle,
+            // Name = "" pins the model prefix to empty. Without it, a request that contains a key equal to the parameter
+            // name (?query=x) switches MVC to the "query." prefix, which silently drops every filter and its validation.
+            [FromQuery(Name = "")] GetPeople query,
             CancellationToken cancellationToken)
         {
-            var result = await _mediator.Send(new GetPeople()
-            {
-                Name = name,
-                Rank = rank,
-                DutyTitle = dutyTitle
-            }, cancellationToken);
+            var result = await _mediator.Send(query, cancellationToken);
 
             return this.GetResponse(result);
         }

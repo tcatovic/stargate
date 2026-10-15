@@ -211,6 +211,79 @@ public sealed class PersonHttpTests : IDisposable
         Assert.Equal(new[] { "200", "400", "404", "500" }, ResponseCodes(single));
     }
 
+    [Theory]
+    [InlineData("ra")]
+    [InlineData("elena")]
+    [InlineData("Okafor")]
+    [InlineData("Mira%20Okafo")]
+    public async Task F1_APartialName_ReturnsAnEmptyList(string name)
+    {
+        var (status, _, json) = await Get("/Person?name=" + name);
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.True(json.GetProperty("success").GetBoolean());
+        Assert.Equal(JsonValueKind.Array, json.GetProperty("people").ValueKind);
+        Assert.Equal(0, json.GetProperty("people").GetArrayLength());
+    }
+
+    [Theory]
+    [InlineData("Elena%20Vasquez")]
+    [InlineData("ELENA%20VASQUEZ")]
+    [InlineData("%20%20elena%20vasquez%20")]
+    public async Task F2_TheFullNameInAnyCaseWithPadding_FindsExactlyThatPerson(string name)
+    {
+        var (status, _, json) = await Get("/Person?name=" + name);
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        var people = json.GetProperty("people");
+        Assert.Equal(1, people.GetArrayLength());
+        Assert.Equal("Elena Vasquez", people[0].GetProperty("name").GetString());
+    }
+
+    [Theory]
+    [InlineData("priya%20raman&rank=MAJ", new[] { "Priya Raman" })]
+    [InlineData("priya%20raman&rank=CPT", new string[0])]
+    [InlineData("mira%20okafor&dutyTitle=Pilot", new string[0])]
+    public async Task F3_TheNameFilterCombinesWithTheOthers(string query, string[] expected)
+    {
+        var (_, _, json) = await Get("/Person?name=" + query);
+
+        Assert.Equal(expected, json.GetProperty("people").EnumerateArray().Select(p => p.GetProperty("name").GetString()).ToArray());
+    }
+
+    [Fact]
+    public async Task F4_SwaggerDescribesTheNameFilterAsExact_AndEmitsThePatternVerbatim()
+    {
+        var (_, _, json) = await Get("/swagger/v1/swagger.json");
+
+        var parameters = json.GetProperty("paths").GetProperty("/Person").GetProperty("get").GetProperty("parameters")
+            .EnumerateArray().ToDictionary(p => p.GetProperty("name").GetString()!);
+        var description = parameters["name"].GetProperty("description").GetString()!;
+        Assert.Contains("exact", description);
+        Assert.DoesNotContain("contains", description);
+        foreach (var parameter in parameters.Values)
+        {
+            Assert.Equal(@"^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z", parameter.GetProperty("schema").GetProperty("pattern").GetString());
+        }
+    }
+
+    [Theory]
+    [InlineData("name", "..")]
+    [InlineData("name", "'")]
+    [InlineData("rank", ".")]
+    [InlineData("dutyTitle", "-")]
+    public Task F6_APunctuationOnlyFilter_Is400(string parameter, string value) =>
+        AssertBadRequest($"/Person?{parameter}={Uri.EscapeDataString(value)}", parameter);
+
+    [Fact]
+    public async Task F7_ALetterAndPunctuationFilter_IsAccepted()
+    {
+        var (status, _, json) = await Get("/Person?name=a.");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(0, json.GetProperty("people").GetArrayLength());
+    }
+
     private static string[] ResponseCodes(JsonElement operation) =>
         operation.GetProperty("responses").EnumerateObject().Select(r => r.Name).Order().ToArray();
 }

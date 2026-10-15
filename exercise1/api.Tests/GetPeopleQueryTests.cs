@@ -34,10 +34,12 @@ public class GetPeopleQueryTests
     }
 
     [Theory]
-    [InlineData("ra", new[] { "Mira Okafor", "Priya Raman" })]
-    [InlineData("ELENA", new[] { "Elena Vasquez" })]
-    [InlineData("okafor", new[] { "Mira Okafor" })]
-    public async Task P2_NameIsCaseInsensitiveContains(string name, string[] expected)
+    [InlineData("ra", new string[0])]
+    [InlineData("ELENA", new string[0])]
+    [InlineData("okafor", new string[0])]
+    [InlineData("elena vasquez", new[] { "Elena Vasquez" })]
+    [InlineData("MIRA OKAFOR", new[] { "Mira Okafor" })]
+    public async Task P2_NameIsCaseInsensitiveExact(string name, string[] expected)
     {
         using var db = PeopleFixture.Create();
         Assert.Equal(expected.ToHashSet(), Names(await Run(db, new GetPeople { Name = name })));
@@ -69,8 +71,8 @@ public class GetPeopleQueryTests
         using var db = PeopleFixture.Create();
 
         Assert.Equal(["Elena Vasquez"], Names(await Run(db, new GetPeople { Rank = "MAJ", DutyTitle = "commander" })));
-        Assert.Equal(["Priya Raman"], Names(await Run(db, new GetPeople { Name = "priya", Rank = "maj" })));
-        Assert.Empty((await Run(db, new GetPeople { Name = "elena", DutyTitle = "Pilot" })).People);
+        Assert.Equal(["Priya Raman"], Names(await Run(db, new GetPeople { Name = "priya raman", Rank = "maj" })));
+        Assert.Empty((await Run(db, new GetPeople { Name = "elena vasquez", DutyTitle = "Pilot" })).People);
     }
 
     [Fact]
@@ -91,10 +93,10 @@ public class GetPeopleQueryTests
     {
         using var db = PeopleFixture.Create();
 
-        Assert.Empty((await Run(db, new GetPeople { Name = "Mira", Rank = "CPT" })).People);
+        Assert.Empty((await Run(db, new GetPeople { Name = "mira okafor", Rank = "CPT" })).People);
         // An empty-string rank must not match the unassigned people's "" either: it means no filter.
         Assert.Equal(PeopleFixture.AllNames.ToHashSet(), Names(await Run(db, new GetPeople { Rank = "" })));
-        var kenji = (await Run(db, new GetPeople { Name = "kenji" })).People.Single();
+        var kenji = (await Run(db, new GetPeople { Name = "kenji watanabe" })).People.Single();
         Assert.Equal("Kenji Watanabe", kenji.Name);
         Assert.Equal("", kenji.CurrentRank);
         Assert.Equal("", kenji.CurrentDutyTitle);
@@ -142,11 +144,13 @@ public class GetPeopleQueryTests
     }
 
     [Theory]
-    [InlineData("%", new[] { "100% Real" })]
-    [InlineData("_", new[] { "Ann_Marie" })]
-    [InlineData("\\", new[] { "Back\\Slash" })]
-    [InlineData("n_M", new[] { "Ann_Marie" })]
-    public async Task P9_LikeWildcardsAreLiteral(string name, string[] expected)
+    [InlineData("%", new string[0])]
+    [InlineData("_", new string[0])]
+    [InlineData("n_M", new string[0])]
+    [InlineData("ann_marie", new[] { "Ann_Marie" })]
+    [InlineData("Back\\Slash", new[] { "Back\\Slash" })]
+    [InlineData("100% real", new[] { "100% Real" })]
+    public async Task P9_WildcardCharactersAreLiteralInAnExactMatch(string name, string[] expected)
     {
         using var db = PeopleFixture.Create(
             new Person { Name = "100% Real" }, new Person { Name = "Ann_Marie" },
@@ -160,7 +164,7 @@ public class GetPeopleQueryTests
     {
         using var db = PeopleFixture.Create();
 
-        Assert.Equal(["Elena Vasquez"], Names(await Run(db, new GetPeople { Name = " elena " })));
+        Assert.Equal(["Elena Vasquez"], Names(await Run(db, new GetPeople { Name = " elena vasquez " })));
         Assert.Equal(["Desmond Achebe"], Names(await Run(db, new GetPeople { DutyTitle = "retired " })));
     }
 
@@ -172,16 +176,6 @@ public class GetPeopleQueryTests
         var result = await Run(db, new GetPeople { Name = "   ", Rank = null, DutyTitle = "\t" });
 
         Assert.Equal(PeopleFixture.AllNames.ToHashSet(), Names(result));
-    }
-
-    [Fact]
-    public async Task P11_CaseFoldingIsAsciiOnly()
-    {
-        using var db = PeopleFixture.Create(new Person { Name = "Élena Test" });
-
-        Assert.Equal(["Élena Test"], Names(await Run(db, new GetPeople { Name = "Élena" })));
-        Assert.Equal(["Élena Test"], Names(await Run(db, new GetPeople { Name = "ÉLENA" })));
-        Assert.Empty((await Run(db, new GetPeople { Name = "élena" })).People);
     }
 
     [Fact]

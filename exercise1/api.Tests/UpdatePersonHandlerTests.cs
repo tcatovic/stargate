@@ -94,19 +94,6 @@ public class UpdatePersonHandlerTests
     }
 
     [Fact]
-    public async Task H4_AnNfdNameIsStoredAsNfc()
-    {
-        using var db = SeededDatabase();
-        var mira = IdOf(db, "Mira Okafor");
-
-        var result = await Rename(db, mira, "Rene\u0301e O\u0308degaard");
-
-        var stored = StoredName(db, mira);
-        Assert.Equal(new[] { 'R', 'e', 'n', '\u00E9', 'e', ' ', '\u00D6', 'd', 'e', 'g', 'a', 'a', 'r', 'd' }, stored.ToCharArray());
-        Assert.Equal(stored, result.Person?.Name);
-    }
-
-    [Fact]
     public async Task H5_RenamingToTheOwnExactName_Succeeds_AndChangesNothing()
     {
         using var db = SeededDatabase();
@@ -189,28 +176,12 @@ public class UpdatePersonHandlerTests
     }
 
     [Fact]
-    public async Task H10_NfdVariantsConflictWithNfcNames_ButNonAsciiCaseVariantsDoNot()
-    {
-        using var db = SeededDatabase();
-        var mira = IdOf(db, "Mira Okafor");
-        var kenji = IdOf(db, "Kenji Watanabe");
-        Assert.Equal(200, (await Rename(db, mira, "Ren\u00E9e")).ResponseCode);
-
-        Assert.Equal(409, (await Rename(db, kenji, "Rene\u0301e")).ResponseCode);
-        Assert.Equal(409, (await Rename(db, kenji, "rEne\u0301e")).ResponseCode);
-        Assert.Equal("Kenji Watanabe", StoredName(db, kenji));
-
-        // SQLite NOCASE folds ASCII only: a capital E-acute is a different name (documented limit).
-        Assert.Equal(200, (await Rename(db, kenji, "REN\u00C9E")).ResponseCode);
-    }
-
-    [Fact]
     public async Task H11_WhenTheDatabaseRejectsALostRace_TheResultIs409_NotAnException()
     {
         using var db = SeededDatabase();
         var priya = IdOf(db, "Priya Raman");
         var kenji = IdOf(db, "Kenji Watanabe");
-        var intruder = new RenameOnAnotherConnection(db.ConnectionString, $"UPDATE \"Person\" SET \"Name\" = 'Zed Unique' WHERE \"Id\" = {priya}");
+        var intruder = new SqlOnAnotherConnectionBeforeSave(db.ConnectionString, $"UPDATE \"Person\" SET \"Name\" = 'Zed Unique' WHERE \"Id\" = {priya}");
 
         // The pre-check passes (nobody has the name yet); Priya takes it just before Kenji's UPDATE runs.
         var result = await Rename(db, kenji, "zed unique", null, intruder);
@@ -252,6 +223,7 @@ public class UpdatePersonHandlerTests
     [InlineData("Ada\u3164")]
     [InlineData("Ada\u180E")]
     [InlineData("\u180EAda")]
+    [InlineData("..")]
     public async Task H13_AnInvalidNamePassedDirectly_ThrowsArgumentException_AndChangesNothing(string name)
     {
         using var db = SeededDatabase();
@@ -306,7 +278,7 @@ public class UpdatePersonHandlerTests
     {
         using var db = SeededDatabase();
         var mira = IdOf(db, "Mira Okafor");
-        var deleter = new RenameOnAnotherConnection(db.ConnectionString, $"DELETE FROM \"Person\" WHERE \"Id\" = {mira}");
+        var deleter = new SqlOnAnotherConnectionBeforeSave(db.ConnectionString, $"DELETE FROM \"Person\" WHERE \"Id\" = {mira}");
 
         var result = await Rename(db, mira, "Mira Renamed", null, deleter);
 
@@ -337,7 +309,7 @@ public class UpdatePersonHandlerTests
     }
 
     [Fact]
-    public async Task H18_AnOverlongRawName_IsRejectedWithoutBeingNormalised()
+    public async Task H18_AnOverlongName_IsRejected()
     {
         using var db = SeededDatabase();
         var mira = IdOf(db, "Mira Okafor");
@@ -347,7 +319,6 @@ public class UpdatePersonHandlerTests
 
         Assert.DoesNotContain("aaaa", ex.Message);
         Assert.Equal(before, db.Dump());
-        // 800 raw characters is within the raw bound but still not a valid name (over 100 after normalising).
         await Assert.ThrowsAsync<ArgumentException>(() => Rename(db, mira, new string('a', 800)));
         Assert.Equal(before, db.Dump());
     }
@@ -367,32 +338,5 @@ public class UpdatePersonHandlerTests
             command.ExecuteNonQuery();
             return base.SavedChangesAsync(eventData, result, cancellationToken);
         }
-    }
-
-    private sealed class RenameOnAnotherConnection(string connectionString, string sql) : SaveChangesInterceptor
-    {
-        public bool Ran { get; private set; }
-
-        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
-        {
-            if (!Ran)
-            {
-                Ran = true;
-                using var connection = new SqliteConnection(connectionString);
-                connection.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = sql;
-                command.ExecuteNonQuery();
-            }
-            return base.SavingChangesAsync(eventData, result, cancellationToken);
-        }
-    }
-
-    private sealed class ThrowOnSave(Exception exception) : SaveChangesInterceptor
-    {
-        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default) =>
-            throw exception;
     }
 }

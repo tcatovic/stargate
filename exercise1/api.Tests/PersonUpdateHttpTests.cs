@@ -96,8 +96,8 @@ public sealed class PersonUpdateHttpTests : IDisposable
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerStartDate").ValueKind);
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerEndDate").ValueKind);
 
-        var (_, _, list) = await Get("/Person?name=Lindqvist");
-        Assert.Contains("Mira Okafor-Lindqvist", Names(list));
+        var (_, _, list) = await Get("/Person?name=mira%20okafor-lindqvist");
+        Assert.Equal(new[] { "Mira Okafor-Lindqvist" }, Names(list));
     }
 
     [Fact]
@@ -186,6 +186,11 @@ public sealed class PersonUpdateHttpTests : IDisposable
         NameJson("x' OR '1'='1"),
         NameJson("Robert'); DROP TABLE Person;--"),
         NameJson("a\tb"),
+        NameJson("."),
+        NameJson(".."),
+        NameJson("'"),
+        NameJson("-"),
+        NameJson(". -"),
         NameJson("Ada\u3164"),
         NameJson("\u0301Ada"),
         NameJson("Ada\u200B"),
@@ -206,16 +211,7 @@ public sealed class PersonUpdateHttpTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Equal(400, json.GetProperty("status").GetInt32());
-        var errors = json.GetProperty("errors");
-        Assert.NotEmpty(errors.EnumerateObject());
-        Assert.Contains(errors.EnumerateObject(), e => e.Name.Equals("name", StringComparison.OrdinalIgnoreCase));
-        using (var submitted = JsonDocument.Parse(body))
-        {
-            if (submitted.RootElement.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && name.GetString()!.Trim().Length > 0)
-            {
-                Assert.DoesNotContain(name.GetString()!, text);
-            }
-        }
+        ProblemAssert.NameRejected(json, body);
         Assert.Equal(before, _db.Dump());
     }
 
@@ -242,6 +238,25 @@ public sealed class PersonUpdateHttpTests : IDisposable
         }
         // The framework-defined error keys are not pinned (clients must not branch on them), but none may carry the body.
         Assert.DoesNotContain("\"name\":", text);
+        Assert.Equal(before, _db.Dump());
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"name\":4242}")]
+    [InlineData("\"Ada\"")]
+    [InlineData("{\"name\":\"Tokenxyz")]
+    [InlineData("{\"name\":")]
+    public async Task M1_MalformedJson_Is400_WithoutParserInternals(string body)
+    {
+        var before = _db.Dump();
+
+        var (status, _, json) = await Send(HttpMethod.Put, $"/Person/{IdOf("Mira Okafor")}", body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.Equal(400, json.GetProperty("status").GetInt32());
+        Assert.NotEmpty(json.GetProperty("errors").EnumerateObject());
+        ProblemAssert.NoParserInternals(json);
         Assert.Equal(before, _db.Dump());
     }
 
@@ -283,7 +298,7 @@ public sealed class PersonUpdateHttpTests : IDisposable
         var (status, text, _) = await Put(mira, new string('a', 5000));
 
         // [RequestSizeLimit(4096)] makes Kestrel answer 413. TestServer does not enforce the Kestrel limit, so over the
-        // in-memory server the request is still refused, by the 800-character raw bound, as a 400. Either way it is
+        // in-memory server the request is still refused, by the 100-character name rule, as a 400. Either way it is
         // rejected, nothing changes and the submitted text is not echoed; the 413 itself is checked against real Kestrel.
         Assert.True(status is HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.BadRequest, status.ToString());
         Assert.DoesNotContain(new string('a', 50), text);
@@ -412,20 +427,22 @@ public sealed class PersonUpdateHttpTests : IDisposable
     }
 
     [Fact]
-    public async Task P13_TheReadSideFindsNfcNamesWithNfdInput_AndRejectsInvisibleLetters()
+    public async Task P20_ALegacyNonAsciiRow_IsListedAndRenameableById_ButNotFindableByName()
     {
-        var mira = IdOf("Mira Okafor");
-        Assert.Equal(HttpStatusCode.OK, (await Put(mira, "Ren\u00E9e \u00D6degaard")).Status);
+        _db.Execute("INSERT INTO \"Person\" (\"Name\") VALUES ('Jos\u00E9')");
+        var legacy = IdOf("Jos\u00E9");
 
-        var (status, _, list) = await Get("/Person?name=Rene%CC%81e");
-        var (invisible, _, _) = await Get("/Person?name=Ada%E3%85%A4");
-        var (byName, _, single) = await Get("/Person/Rene%CC%81e%20%C3%96degaard");
+        var (filterStatus, _, _) = await Get("/Person?name=Jos%C3%A9");
+        var (_, _, list) = await Get("/Person");
+        Assert.Equal(HttpStatusCode.BadRequest, filterStatus);
+        Assert.Contains("Jos\u00E9", Names(list));
 
-        Assert.Equal(HttpStatusCode.OK, status);
-        Assert.Contains("Ren\u00E9e \u00D6degaard", Names(list));
-        Assert.Equal(HttpStatusCode.BadRequest, invisible);
-        Assert.Equal(HttpStatusCode.OK, byName);
-        Assert.Equal(mira, single.GetProperty("person").GetProperty("personId").GetInt32());
+        var (putStatus, _, put) = await Put(legacy, "Jose");
+
+        Assert.Equal(HttpStatusCode.OK, putStatus);
+        Assert.Equal("Jose", put.GetProperty("person").GetProperty("name").GetString());
+        var (_, _, after) = await Get("/Person?name=jose");
+        Assert.Equal(new[] { "Jose" }, Names(after));
     }
 
     [Fact]

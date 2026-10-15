@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract 006 (rev. 3): ASCII names, exact name filter, POST /Person</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.45rem; margin:.4rem 0; } h2 { font-size:1.12rem; margin:1.6rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Contract 006 &middot; <strong>revision 3</strong> &middot; baseline <code>main</code> <code>f42dc41</code> &middot; implementation merged at <code>998036f</code> &middot; plan: <a href="../../plans/006-create-person-endpoint.html">006-create-person-endpoint.html</a> &middot; status: revision 3 awaiting re-approval</p>
+<h1>Contract 006: ASCII-only names, exact name filter, validated POST /Person</h1>
+
+<div class="card amend"><p><strong>Revision 3: what changed from revision 2</strong> (the review round changed the merged code; this revision makes the contract match it)</p>
+<ol>
+<li><strong>Name rule: at least one ASCII letter or digit.</strong> Punctuation-only names (<code>.</code>, <code>..</code>, <code>'</code>, <code>-</code>, <code>. -</code>) are now 400 on all four endpoints. Why: <code>..</code> breaks the UI's URL building (<code>/api/Person/..</code> resolves to <code>/api/</code>), and none of them is a name. New pattern <code>^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z</code> and new message text (below). Files: <code>openapi.yaml</code> (<code>NameRule</code>, <code>NameFilter</code>, <code>ValidationFailed</code>), <code>data.md</code>, <code>tests.md</code>, this page, the plan.</li>
+<li><strong>Malformed JSON gets generic messages only.</strong> <code>AllowInputFormatterExceptionMessages = false</code> in <code>Program.cs</code>. A body such as <code>[]</code>, <code>{"name":4242}</code>, a bare string or truncated JSON is still 400, but the messages are fixed framework text (for example <code>{"$":["The input was not valid."],"request":["The request field is required."]}</code>), never .NET type names, paths, line numbers or byte positions. Why: the parser messages leaked internal type names. Files: <code>openapi.yaml</code> (<code>ValidationFailed</code>), <code>data.md</code> (new section), <code>tests.md</code> (<code>M1</code>).</li>
+<li><strong>The 400 message set for <code>name</code> is now exact</strong> (it was already the code's behaviour): rule failure gives the rule message; missing or null gives "The Name field is required."; blank gives both, in that order. File: <code>openapi.yaml</code>.</li>
+<li><strong>Tests</strong> (<code>tests.md</code>): weak tests removed (R13, R21, R25's source-text checks, F5, create H3, update P13, duplicate rows); no-echo checks strengthened (<code>ProblemAssert</code>); new C6, C7, P18, P19, R27, R28, F6, F7, P20 and M1. Why: tests.md must match the merged suite.</li>
+<li><strong>Open issues recorded</strong> (not part of this task, not fixed): SQL built by string interpolation in <code>CreateAstronautDuty</code>, and no authentication on any write endpoint. See "Open" below.</li>
+<li>No UI type changes; <code>types.ts</code> is untouched.</li>
+</ol></div>
+
+<div class="card amend"><p><strong>Revision 2: what changed from revision 1</strong> (the user changed the scope)</p>
+<ul>
+<li><strong>New: ASCII-only name rule</strong>, for all four endpoints that use it. The NFC step, the invisible-character set, the combining-mark limit and the 800-character raw bound are removed. Only ASCII whitespace is trimmed, so a no-break space at an edge is 400. Files: <code>openapi.yaml</code> (<code>NameRule</code>), <code>data.md</code>, <code>tests.md</code> sections A and C1.</li>
+<li><strong>New: <code>GET /Person?name=</code> is exact</strong>, with no contains. Files: <code>openapi.yaml</code>, <code>data.md</code>, <code>tests.md</code> sections A and C2.</li>
+<li><strong>Location</strong> stays <code>/Person?name=&lt;encoded&gt;</code> (accepted). It now returns exactly the created person. The tests use ASCII names.</li>
+<li>The look-alike question is moot. The empty 500 body is accepted.</li>
+<li>No UI type changes. Two UI comments are corrected (<code>types.ts</code> header).</li>
+</ul></div>
+
+<div class="card bad"><p><strong>Breaking changes</strong> (all accepted by the user):</p>
+<ul>
+<li><strong>Punctuation-only names</strong> (rev. 3), such as <code>.</code>, <code>..</code>, <code>'</code> and <code>-</code>, get 400 on the same four endpoints. They were accepted before (on GET filters and PUT, and stored by POST).</li>
+<li><strong>Non-ASCII names</strong> get 400 on <code>GET /Person</code> (filters), <code>GET /Person/{name}</code>, <code>PUT /Person/{personId}</code> and <code>POST /Person</code>. This includes previously valid names such as <code>Émile</code>, NFD input, and a no-break space at an edge. The validation message wording changes.</li>
+<li><strong><code>GET /Person?name=</code></strong> is now exact (case-insensitive, trimmed). A partial name returns an empty list. For example, <code>?name=elena</code> no longer finds <code>Elena Vasquez</code>.</li>
+<li><strong><code>POST /Person</code></strong> changes in several ways:
+  <ul>
+    <li>Body: <code>{ "name": "..." }</code> instead of a bare string (400 or 415).</li>
+    <li>Success: 201 (was 200), with a <code>Location</code> header.</li>
+    <li>Duplicate: 409 (was 500 or a duplicate row).</li>
+    <li>Invalid name: 400 (was stored).</li>
+    <li>New statuses: 415 and 413.</li>
+    <li>500: empty body (it used to contain the exception message).</li>
+  </ul></li>
+</ul></div>
+
+<h2>The name rule (one definition, used everywhere)</h2>
+<pre><code>trim ASCII whitespace (tab, LF, VT, FF, CR, space)   -- nothing else is trimmed
+then 1..100 characters, each one of:  A-Z a-z 0-9 space . ' -
+with at least one ASCII letter or digit                (rev. 3)
+pattern ^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z
+        (no IgnoreCase, no \d, no Unicode normalisation; the lookahead is linear)</code></pre>
+<p>Message (exact text, display only): "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters)."</p>
+<div class="table-wrap"><table>
+<tr><th>Valid</th><th>Invalid</th></tr>
+<tr><td><code>Ada Lovelace</code>, <code>Aoife O'Brien-Smith Jr.</code>, <code>2LT</code>, <code>a.</code>, <code>A-1</code>, <code>. a</code>, <code>7</code>, 100 letters</td><td><code>.</code>, <code>..</code>, <code>'</code>, <code>-</code>, <code>. -</code>, empty, blank, 101 letters, <code>&lt;script&gt;</code>, <code>%</code>, <code>_</code>, <code>Jos&#xE9;</code>, any non-ASCII character</td></tr>
+</table></div>
+<ul>
+<li>Uniqueness and lookups compare ignoring ASCII case (SQLite NOCASE). For ASCII names that is complete case-insensitivity.</li>
+<li>GET filters and the GET route check the value <em>as sent</em>, so an edge tab or newline is 400 there. That is unchanged from today, and task 008 can unify it.</li>
+<li>Seed names, ranks and titles are all valid.</li>
+</ul>
+
+<h2>GET /Person?name=</h2>
+<div class="table-wrap"><table>
+<tr><th>Query</th><th>Before</th><th>After</th></tr>
+<tr><td><code>?name=ra</code></td><td>Mira Okafor, Priya Raman</td><td><code>[]</code></td></tr>
+<tr><td><code>?name=elena</code></td><td>Elena Vasquez</td><td><code>[]</code></td></tr>
+<tr><td><code>?name=%20ELENA%20VASQUEZ</code></td><td>Elena Vasquez</td><td>Elena Vasquez</td></tr>
+<tr><td><code>?name=Jos%C3%A9</code></td><td>200</td><td>400</td></tr>
+</table></div>
+<p><code>rank</code>, <code>dutyTitle</code> and the response shape are unchanged.</p>
+
+<h2>POST /Person</h2>
+<pre><code>POST /Person
+Content-Type: application/json        (at most 4096 bytes)
+{ "name": "Ada Lovelace" }            (unknown properties ignored)</code></pre>
+<div class="table-wrap"><table>
+<tr><th>Status</th><th>When</th><th>Body</th></tr>
+<tr><td>201</td><td>Created</td><td><code>{ "id": 7, "success": true, "message": "Successful", "responseCode": 201 }</code> plus <code>Location: /Person?name=Ada%20Lovelace</code>. A GET of it returns exactly this person.</td></tr>
+<tr><td>400</td><td>The body is empty, not an object (including a bare string) or malformed; <code>name</code> is missing, null or not a string; or the name rule fails</td><td><code>ValidationProblemDetails</code>, which never echoes the input. Malformed JSON gives generic messages only (rev. 3). Clients must not parse keys or messages</td></tr>
+<tr><td>409</td><td>The name is taken (ignoring ASCII case and surrounding whitespace). This comes from the pre-check or from the unique index during a concurrent create</td><td><code>{ "id": null, "success": false, "message": "A person with this name already exists", "responseCode": 409 }</code>, with no <code>Location</code></td></tr>
+<tr><td>413</td><td>Body over 4096 bytes (Kestrel)</td><td>Unspecified</td></tr>
+<tr><td>415</td><td>Content-Type is not JSON (empty body), or there is no Content-Type (ProblemDetails)</td><td>Key on the status only</td></tr>
+<tr><td>500</td><td>Unexpected fault</td><td>Empty in Production; the developer page in Development</td></tr>
+</table></div>
+<p>Order of checks: 415 or 413, then 400, then 409. <code>Location</code> is <code>"/Person?name=" + Uri.EscapeDataString(stored name)</code>, for example <code>/Person?name=Aoife%20O%27Brien%20Jr.</code>.</p>
+
+<h2>UI client</h2>
+<pre><code>createPerson(name: string): Observable&lt;CreatePersonOutcome&gt;
+  // POST /api/Person { name }  (name unmodified)
+  // 201, id &gt;= 1     -&gt; { status: 'created', id }
+  // 201, bad id      -&gt; error 'Malformed create response'
+  // 409 -&gt; { status: 'conflict' }    400 -&gt; { status: 'invalid', errors }    other -&gt; HttpErrorResponse</code></pre>
+
+<h2>Domain rules</h2>
+<ul>
+<li><strong>Rule 1</strong>: names are ASCII, trimmed and contain a letter or digit, there is a NOCASE pre-check, and the existing unique index <code>IX_Person_Name</code> is the guarantee (a lost race is 409). Lookup by name is exact.</li>
+<li><strong>Rule 2</strong>: create inserts only a <code>Person</code>. Tests compare the astronaut tables before and after.</li>
+</ul>
+
+<h2>Removed</h2>
+<ul>
+<li>From <code>InputRules</code>:
+  <ul>
+    <li>NFC normalisation</li>
+    <li>the 28 invisible code points</li>
+    <li>the combining-mark limit</li>
+    <li><code>MaxRawLength</code></li>
+  </ul></li>
+<li>From <code>GetPeople</code>: <code>LIKE</code>, <code>ESCAPE</code> and <code>EscapeLike</code>.</li>
+<li><code>CreatePersonPreProcessor</code> (dead code).</li>
+<li>The POST <code>try/catch</code> that returned <code>ex.Message</code>.</li>
+</ul>
+<p>The applied migration <code>AddUniquePersonNameIndex</code> is not touched.</p>
+
+<div class="card bad"><p><strong>Open: not part of this task, not fixed</strong> (recorded in revision 3; the user has not yet decided whether the fix goes into this PR or a separate security task)</p>
+<ol>
+<li><strong>Second-order SQL injection through <code>POST /AstronautDuty</code>.</strong> <code>Business/Commands/CreateAstronautDuty.cs:56</code> builds <code>SELECT * FROM [Person] WHERE '{request.Name}' = Name</code> by string interpolation (lines 70 and 100 interpolate <code>person.Id</code> the same way). The registered pre-processor first requires a person whose name equals <code>request.Name</code> exactly (EF, parameterised), so the attacker stores the payload as a name first. Names may contain apostrophes and spaces, and <code>POST /Person</code> has no authentication, so a stored name such as <code>a' OR Id IS 3 OR 'a</code> passes the name rule; <code>POST /AstronautDuty</code> with that name then reads person 3 and writes a duty, detail and rank to <em>person 3</em>. This predates task 006 (before it, <code>POST /Person</code> stored any string); 006 narrows the payload alphabet but does not close it. Fix (deferred): parameterise the queries at <code>CreateAstronautDuty.cs:56</code>, <code>:70</code> and <code>:100</code>.</li>
+<li><strong>The same pattern in <code>GetAstronautDutiesByName.cs:28</code></strong> (and <code>:38</code>). Today it is not reachable over HTTP, because <code>AstronautDutyController.GetAstronautDutiesByName</code> sends <code>GetPersonByName</code> instead; it becomes exploitable as soon as it is wired up.</li>
+<li><strong>No authentication on any write endpoint</strong> (<code>POST /Person</code>, <code>PUT /Person/{personId}</code>, <code>POST /AstronautDuty</code>). <code>UseAuthorization</code> is called but no scheme or policy is configured. Unchanged by this task.</li>
+</ol></div>
+
+<h2>Open question (answer when approving)</h2>
+<ol>
+<li><strong>Existing non-ASCII names in a database.</strong> They remain, are listed, and can be renamed by id, but they cannot be looked up by name. <em>Recommended</em>: no data migration and no database CHECK constraint, because the API is pre-release and development databases reseed with ASCII names.</li>
+</ol>
+
+<h2>Files</h2>
+<ul>
+<li><a href="openapi.yaml">openapi.yaml</a>: <code>NameRule</code>, the 400 message set, plus the four endpoints</li>
+<li><a href="data.md">data.md</a>: exact C# for the rule, the parser-message setting, the filter and POST; rule enforcement; README text</li>
+<li><a href="types.ts">types.ts</a>: UI types (unchanged except comments)</li>
+<li><a href="tests.md">tests.md</a>: existing tests to delete, rewrite or keep (section A, final state after the review round), <code>ProblemAssert</code>, new tests C1-C4, and mutation targets</li>
+</ul>
+</main>
+</body>
+</html>

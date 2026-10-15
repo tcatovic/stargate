@@ -72,6 +72,7 @@ namespace StargateAPI.Controllers
 
         [HttpPut("{personId}")]
         [Consumes("application/json")]
+        [RequestSizeLimit(4096)]
         [EndpointSummary("Rename a person")]
         [EndpointDescription("Renames the person with this id. The name is NFC-normalised and trimmed, then validated against the shared "
             + "name rule, compared and stored. Names are unique ignoring ASCII case (SQLite NOCASE) after that normalisation; "

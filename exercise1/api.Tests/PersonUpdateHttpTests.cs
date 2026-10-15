@@ -220,12 +220,13 @@ public sealed class PersonUpdateHttpTests : IDisposable
     }
 
     [Theory]
-    [InlineData("")]
-    [InlineData("\"Ada\"")]
-    [InlineData("{\"name\":123}")]
-    [InlineData("[]")]
-    [InlineData("{\"name\":")]
-    public async Task P7_BodyShapeFailures_Are400_AndChangeNothing(string body)
+    [InlineData("", null)]
+    [InlineData("\"Tokenabc\"", "Tokenabc")]
+    [InlineData("{\"name\":4242424242}", "4242424242")]
+    [InlineData("[]", null)]
+    [InlineData("{\"name\":", null)]
+    [InlineData("{\"name\":\"Tokenxyz\",", "Tokenxyz")]
+    public async Task P7_BodyShapeFailures_Are400_WithoutEchoingTheSubmittedToken_AndChangeNothing(string body, string? token)
     {
         var mira = IdOf("Mira Okafor");
         var before = _db.Dump();
@@ -235,8 +236,62 @@ public sealed class PersonUpdateHttpTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, status);
         Assert.Equal(400, json.GetProperty("status").GetInt32());
         Assert.NotEmpty(json.GetProperty("errors").EnumerateObject());
-        Assert.DoesNotContain("Ada", text);
+        if (token is not null)
+        {
+            Assert.DoesNotContain(token, text);
+        }
+        // The framework-defined error keys are not pinned (clients must not branch on them), but none may carry the body.
+        Assert.DoesNotContain("\"name\":", text);
         Assert.Equal(before, _db.Dump());
+    }
+
+    [Fact]
+    public async Task P16_AMultiKilobyteName_Is400_WithoutEchoingIt_AndChangesNothing()
+    {
+        var mira = IdOf("Mira Okafor");
+        var before = _db.Dump();
+
+        var (status, text, json) = await Put(mira, new string('a', 3000));
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.Contains(json.GetProperty("errors").EnumerateObject(), e => e.Name.Equals("name", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(new string('a', 50), text);
+        Assert.Equal(before, _db.Dump());
+    }
+
+    [Fact]
+    public async Task P17_ABodyOverTheRequestSizeLimit_IsRejectedAndChangesNothing()
+    {
+        var mira = IdOf("Mira Okafor");
+        var before = _db.Dump();
+
+        var (status, text, _) = await Put(mira, new string('a', 5000));
+
+        // [RequestSizeLimit(4096)] makes Kestrel answer 413. TestServer does not enforce the Kestrel limit, so over the
+        // in-memory server the request is still refused, by the 800-character raw bound, as a 400. Either way it is
+        // rejected, nothing changes and the submitted text is not echoed; the 413 itself is checked against real Kestrel.
+        Assert.True(status is HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.BadRequest, status.ToString());
+        Assert.DoesNotContain(new string('a', 50), text);
+        Assert.Equal(before, _db.Dump());
+    }
+
+    [Fact]
+    public async Task P18a_ValidationRunsBeforeTheLookup_SoAnUnknownIdWithAnInvalidNameIs400Not404()
+    {
+        var (status, _, json) = await Put(999999, "<script>");
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.Contains(json.GetProperty("errors").EnumerateObject(), e => e.Name.Equals("name", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task P18b_AnOutOfRangeIdWithAValidName_Is400_ByTheRangeCheck_NotA404()
+    {
+        // personId 0 fails [Range(1, int.MaxValue)] during model validation, before any handler could answer 404.
+        var (status, _, json) = await Put(0, "Zed Valid");
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.Contains(json.GetProperty("errors").EnumerateObject(), e => e.Name.Equals("personId", StringComparison.OrdinalIgnoreCase));
     }
 
     [Theory]

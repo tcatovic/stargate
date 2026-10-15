@@ -213,4 +213,33 @@ public class InputRulesTests
             Assert.Equal(person.Name, InputRules.Normalize(person.Name));
         }
     }
+
+    [Fact]
+    public void R21_NormalizeTrimsUnicodeWhitespace_NbspAndEmSpace()
+    {
+        Assert.Equal("Ada", InputRules.Normalize("\u00A0Ada\u2003"));
+        Assert.Equal("Ada", InputRules.Normalize("\u3000Ada\u0085"));
+    }
+
+    [Fact]
+    public void R22_SupplementaryPlaneLettersAreRejectedByDesignToday()
+    {
+        // U+1D400 MATHEMATICAL BOLD CAPITAL A is a letter, but \p{L} sees only its two surrogate halves, so any
+        // supplementary-plane letter is rejected until a rule decision says otherwise (same as on main).
+        Assert.False(IsValidName("\uD835\uDC00"));
+        Assert.False(IsValidName("Ada\uD835\uDC00"));
+    }
+
+    [Fact]
+    public void R23_AttributeRejectsRawInputOverTheRawBound_BeforeNormalising()
+    {
+        var attribute = new ValidNameAttribute();
+
+        Assert.False(attribute.IsValid(new string('a', InputRules.MaxRawLength + 1)));
+        Assert.False(attribute.IsValid(new string(' ', InputRules.MaxRawLength + 1) + "Ada"));
+        // 100 NFC-composed letters written decomposed (200 raw characters) are still a valid 100-character name.
+        Assert.True(attribute.IsValid(string.Concat(Enumerable.Repeat("e\u0301", 100))));
+        Assert.False(attribute.IsValid(string.Concat(Enumerable.Repeat("e\u0301", 101))));
+        Assert.Equal(800, InputRules.MaxRawLength);
+    }
 }

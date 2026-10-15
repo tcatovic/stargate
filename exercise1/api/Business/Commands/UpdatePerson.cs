@@ -52,7 +52,8 @@ namespace StargateAPI.Business.Commands
 
         public async Task<UpdatePersonResult> Handle(UpdatePerson request, CancellationToken cancellationToken)
         {
-            var name = InputRules.Normalize(request.Name);
+            // The raw length is checked first so normalisation never runs on unbounded input.
+            var name = request.Name.Length <= InputRules.MaxRawLength ? InputRules.Normalize(request.Name) : string.Empty;
             if (!InputRules.IsValidName(name))
             {
                 // Unreachable over HTTP (model validation runs first); guards other callers. Never includes the value.
@@ -62,14 +63,7 @@ namespace StargateAPI.Business.Commands
             var person = await _context.People.SingleOrDefaultAsync(p => p.Id == request.PersonId, cancellationToken);
             if (person is null)
             {
-                _logger.LogInformation("Rename of person {PersonId} rejected: {Reason}", request.PersonId, "not found");
-                return new UpdatePersonResult
-                {
-                    Success = false,
-                    Message = "Person not found",
-                    ResponseCode = (int)HttpStatusCode.NotFound,
-                    Person = null
-                };
+                return NotFound(request.PersonId);
             }
 
             // Fast path for the common conflict; the unique index on the NOCASE column is the guarantee.
@@ -85,6 +79,11 @@ namespace StargateAPI.Business.Commands
             {
                 await _context.SaveChangesAsync(cancellationToken);
             }
+            catch (DbUpdateConcurrencyException)
+            {
+                // The row was deleted between the load and the save (the UPDATE matched no row).
+                return NotFound(request.PersonId);
+            }
             catch (DbUpdateException ex) when (SqliteErrors.IsUniqueViolation(ex))
             {
                 return NameInUse(request.PersonId);
@@ -96,19 +95,24 @@ namespace StargateAPI.Business.Commands
             var row = updated.FirstOrDefault();
             if (row is null)
             {
-                // Deleted between the update and the read-back (no delete endpoint exists yet).
-                _logger.LogInformation("Rename of person {PersonId} rejected: {Reason}", request.PersonId, "not found");
-                return new UpdatePersonResult
-                {
-                    Success = false,
-                    Message = "Person not found",
-                    ResponseCode = (int)HttpStatusCode.NotFound,
-                    Person = null
-                };
+                // Deleted between the update and the read-back.
+                return NotFound(request.PersonId);
             }
 
             _logger.LogInformation("Renamed person {PersonId}", request.PersonId);
             return new UpdatePersonResult { Person = row };
+        }
+
+        private UpdatePersonResult NotFound(int personId)
+        {
+            _logger.LogInformation("Rename of person {PersonId} rejected: {Reason}", personId, "not found");
+            return new UpdatePersonResult
+            {
+                Success = false,
+                Message = "Person not found",
+                ResponseCode = (int)HttpStatusCode.NotFound,
+                Person = null
+            };
         }
 
         private UpdatePersonResult NameInUse(int personId)

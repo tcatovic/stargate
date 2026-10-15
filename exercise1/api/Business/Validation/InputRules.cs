@@ -13,6 +13,12 @@ namespace StargateAPI.Business.Validation
     {
         public const int MaxLength = 100;
 
+        /// <summary>
+        /// Raw input longer than this is rejected before <see cref="Normalize"/> runs, so normalisation never works on
+        /// unbounded input. Generous: 100 characters in the worst decomposed form are well under 8 times their length.
+        /// </summary>
+        public const int MaxRawLength = 8 * MaxLength;
+
         // Default-ignorable code points that Unicode classes as letters (Lo) or nonspacing marks (Mn): they render as
         // nothing, so two visually identical names could differ. U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B-U+180F,
         // U+3164, U+FE00-U+FE0F, U+FFA0. Written as regex escapes so the source stays readable and reviewable.

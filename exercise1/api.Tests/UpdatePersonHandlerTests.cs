@@ -181,7 +181,7 @@ public class UpdatePersonHandlerTests
         using var db = SeededDatabase();
         var priya = IdOf(db, "Priya Raman");
         var kenji = IdOf(db, "Kenji Watanabe");
-        var intruder = new RenameOnAnotherConnection(db.ConnectionString, $"UPDATE \"Person\" SET \"Name\" = 'Zed Unique' WHERE \"Id\" = {priya}");
+        var intruder = new SqlOnAnotherConnectionBeforeSave(db.ConnectionString, $"UPDATE \"Person\" SET \"Name\" = 'Zed Unique' WHERE \"Id\" = {priya}");
 
         // The pre-check passes (nobody has the name yet); Priya takes it just before Kenji's UPDATE runs.
         var result = await Rename(db, kenji, "zed unique", null, intruder);
@@ -280,7 +280,7 @@ public class UpdatePersonHandlerTests
     {
         using var db = SeededDatabase();
         var mira = IdOf(db, "Mira Okafor");
-        var deleter = new RenameOnAnotherConnection(db.ConnectionString, $"DELETE FROM \"Person\" WHERE \"Id\" = {mira}");
+        var deleter = new SqlOnAnotherConnectionBeforeSave(db.ConnectionString, $"DELETE FROM \"Person\" WHERE \"Id\" = {mira}");
 
         var result = await Rename(db, mira, "Mira Renamed", null, deleter);
 
@@ -340,32 +340,5 @@ public class UpdatePersonHandlerTests
             command.ExecuteNonQuery();
             return base.SavedChangesAsync(eventData, result, cancellationToken);
         }
-    }
-
-    private sealed class RenameOnAnotherConnection(string connectionString, string sql) : SaveChangesInterceptor
-    {
-        public bool Ran { get; private set; }
-
-        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default)
-        {
-            if (!Ran)
-            {
-                Ran = true;
-                using var connection = new SqliteConnection(connectionString);
-                connection.Open();
-                using var command = connection.CreateCommand();
-                command.CommandText = sql;
-                command.ExecuteNonQuery();
-            }
-            return base.SavingChangesAsync(eventData, result, cancellationToken);
-        }
-    }
-
-    private sealed class ThrowOnSave(Exception exception) : SaveChangesInterceptor
-    {
-        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
-            DbContextEventData eventData, InterceptionResult<int> result, CancellationToken cancellationToken = default) =>
-            throw exception;
     }
 }

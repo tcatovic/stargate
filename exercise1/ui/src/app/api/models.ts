@@ -42,7 +42,7 @@ export interface PersonFilters {
   dutyTitle?: string;
 }
 
-/** Body of every HTTP 400 from GET /Person, GET /Person/{name} and PUT /Person/{personId}. */
+/** Body of every HTTP 400 from GET /Person, GET /Person/{name}, PUT /Person/{personId} and POST /Person. */
 export interface ValidationProblemDetails {
   type: string;
   title: string;
@@ -52,7 +52,7 @@ export interface ValidationProblemDetails {
   traceId: string;
 }
 
-/** Body of PUT /Person/{personId}. The name is sent exactly as given; the server trims and NFC-normalises. */
+/** Body of PUT /Person/{personId}. The name is sent exactly as given; the server trims surrounding whitespace (names are ASCII-only). */
 export interface UpdatePersonRequest {
   name: string;
 }
@@ -66,5 +66,24 @@ export interface UpdatePersonResult extends BaseResponse {
 export type UpdatePersonOutcome =
   | { status: 'updated'; person: PersonAstronaut }
   | { status: 'notFound' }
+  | { status: 'conflict' }
+  | { status: 'invalid'; errors: Record<string, string[]> };
+
+/** Body of POST /Person. The name is sent exactly as given; the server trims surrounding whitespace (names are ASCII-only). */
+export interface CreatePersonRequest {
+  name: string;
+}
+
+/**
+ * Body of POST /Person for 201 and 409. `id` is an integer >= 1 on 201 and null on 409.
+ * There is no `name` property. Property order on the wire is not significant.
+ */
+export interface CreatePersonResult extends BaseResponse {
+  id: number | null;
+}
+
+/** What StargateApi.createPerson emits. Exactly one value, then completes. */
+export type CreatePersonOutcome =
+  | { status: 'created'; id: number }
   | { status: 'conflict' }
   | { status: 'invalid'; errors: Record<string, string[]> };

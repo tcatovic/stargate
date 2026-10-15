@@ -3,6 +3,9 @@ import { Injectable, inject } from '@angular/core';
 import { Observable, catchError, map, of, throwError } from 'rxjs';
 
 import {
+  CreatePersonOutcome,
+  CreatePersonRequest,
+  CreatePersonResult,
   GetAstronautDutiesByNameResult,
   GetPeopleResult,
   GetPersonByNameResult,
@@ -61,7 +64,7 @@ export class StargateApi {
   }
 
   /**
-   * Renames a person. The name is sent unmodified (the server trims and normalises). 404, 409 and 400 are emitted as
+   * Renames a person. The name is sent unmodified (the server trims). 404, 409 and 400 are emitted as
    * outcomes; a 200 without a person errors; every other failure propagates as the HttpErrorResponse.
    */
   updatePerson(personId: number, name: string): Observable<UpdatePersonOutcome> {
@@ -95,6 +98,38 @@ export class StargateApi {
           return throwError(() => error);
         }),
       );
+  }
+
+  /**
+   * Creates a person. POSTs `{ name }` unmodified (no trim, no client-side validation; an empty name is still sent).
+   * 201 with an integer id >= 1 emits created; 409 and 400 are emitted as outcomes; a 201 without a valid id errors
+   * with 'Malformed create response'; every other failure propagates as the HttpErrorResponse.
+   */
+  createPerson(name: string): Observable<CreatePersonOutcome> {
+    const body: CreatePersonRequest = { name };
+    return this.http.post<CreatePersonResult>(`${this.baseUrl}/Person`, body).pipe(
+      map((result): CreatePersonOutcome => {
+        const id: unknown = result?.id;
+        if (typeof id !== 'number' || !Number.isInteger(id) || id < 1) {
+          throw new Error('Malformed create response');
+        }
+        return { status: 'created', id };
+      }),
+      catchError((error: unknown) => {
+        if (error instanceof HttpErrorResponse) {
+          switch (error.status) {
+            case 409:
+              return of<CreatePersonOutcome>({ status: 'conflict' });
+            case 400:
+              return of<CreatePersonOutcome>({
+                status: 'invalid',
+                errors: extractErrors(error.error),
+              });
+          }
+        }
+        return throwError(() => error);
+      }),
+    );
   }
 }
 

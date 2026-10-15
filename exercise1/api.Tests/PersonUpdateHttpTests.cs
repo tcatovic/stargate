@@ -245,6 +245,21 @@ public sealed class PersonUpdateHttpTests : IDisposable
         Assert.Equal(before, _db.Dump());
     }
 
+    [Theory]
+    [InlineData("Ada\u180E")]
+    [InlineData("\u180EAda")]
+    public async Task P19_AMongolianVowelSeparatorAtAnEdge_Is400_NotTrimmedAndStored(string name)
+    {
+        var mira = IdOf("Mira Okafor");
+        var before = _db.Dump();
+
+        var (status, _, json) = await Put(mira, name);
+
+        Assert.Equal(HttpStatusCode.BadRequest, status);
+        Assert.Contains(json.GetProperty("errors").EnumerateObject(), e => e.Name.Equals("name", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(before, _db.Dump());
+    }
+
     [Fact]
     public async Task P16_AMultiKilobyteName_Is400_WithoutEchoingIt_AndChangesNothing()
     {

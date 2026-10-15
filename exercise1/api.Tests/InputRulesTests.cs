@@ -107,9 +107,25 @@ public class InputRulesTests
     [InlineData("Ada\u180C")]
     [InlineData("Ada\u180D")]
     [InlineData("A\u180Eda")]
+    [InlineData("Ada\u180E")]
+    [InlineData("\u180EAda")]
     [InlineData("Ada\u180F")]
     [InlineData("Ada\u200B")]
     public void R13_InvisibleCodePointsAreInvalid(string value) => Assert.False(IsValidName(value));
+
+    [Fact]
+    public void R13d_U180E_IsNotWhitespace_SoTrimKeepsItAtTheEdges_AndTheRuleRejectsIt()
+    {
+        // U+180E (MONGOLIAN VOWEL SEPARATOR) is a format character, not whitespace on .NET 10: Trim() leaves it in place,
+        // so a leading or trailing one is rejected by the pattern, never silently trimmed and stored.
+        Assert.False(char.IsWhiteSpace('\u180E'));
+        Assert.Equal("Ada\u180E", InputRules.Normalize("Ada\u180E"));
+        var attribute = new ValidNameAttribute();
+        Assert.False(attribute.IsValid("Ada\u180E"));
+        Assert.False(attribute.IsValid("\u180EAda"));
+        Assert.DoesNotMatch(InputRules.AllowedCharactersPattern, "Ada\u180E");
+        Assert.DoesNotMatch(InputRules.AllowedCharactersPattern, "\u180EAda");
+    }
 
     [Fact]
     public void R13c_EveryCodePointOfTheInvisibleSetIsRejectedInsideAName()

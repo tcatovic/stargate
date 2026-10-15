@@ -9,7 +9,6 @@ import {
   GetAstronautDutiesByNameResult,
   GetDutiesOutcome,
   GetPeopleResult,
-  GetPersonByNameResult,
   PersonAstronaut,
   PersonFilters,
   UpdatePersonOutcome,
@@ -38,24 +37,6 @@ export class StargateApi {
       }
     }
     return this.http.get<GetPeopleResult>(`${this.baseUrl}/Person`, { params });
-  }
-
-  /** Emits null for an unknown person (HTTP 404) or a blank name (no request is made). Other errors propagate. */
-  getPerson(name: string): Observable<PersonAstronaut | null> {
-    const trimmed = name.trim();
-    if (!trimmed) {
-      return of(null);
-    }
-    return this.http
-      .get<GetPersonByNameResult>(`${this.baseUrl}/Person/${encodeURIComponent(trimmed)}`)
-      .pipe(
-        map((result) => result.person),
-        catchError((error: unknown) =>
-          error instanceof HttpErrorResponse && error.status === 404
-            ? of(null)
-            : throwError(() => error),
-        ),
-      );
   }
 
   /**

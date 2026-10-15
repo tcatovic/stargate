@@ -1,7 +1,7 @@
 ---
 id: 006
 title: Make POST /Person a proper, validated create endpoint
-status: in-progress   # draft | ready | planned | approved | in-progress | done | blocked
+status: done   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]   # api | ui | infra | db
 ---
 
@@ -55,6 +55,8 @@ A caller can add a person with a documented JSON object body, gets a 201 Created
 - Importing people from the external feed.
 
 ## Notes
+**Known open, deliberately NOT fixed here (user decision: it is addressed in the AstronautDuty PR, task 007):** `CreateAstronautDuty.cs` (and `GetAstronautDutiesByName.cs`) build SQL by string interpolation of the person's name. Because names may contain apostrophes and spaces and `POST /Person` has no authentication, a stored name such as `a' OR Id IS 3 OR 'a` makes `POST /AstronautDuty` read and write another person (demonstrated by QA on a scratch database: Tomas Lindqvist's detail was rewritten), and a legitimate `Aoife O'Brien Jr.` gets a 500. Pre-existing; this task narrows what can be stored but does not close it. There is also no authentication on any write endpoint.
+
 Depends on: 002
 
 Why: this task relies on the case-insensitive unique index on `Person.Name` and the shared name rules (trim, length, allowed characters) that 002 defines, so there is one definition of a valid name for create and rename. 002 itself depends on 003 and 005, so the clean migration chain and warning-free build arrive transitively; they are not listed again. 001 and 004 are not prerequisites (004 only helps manual QA).

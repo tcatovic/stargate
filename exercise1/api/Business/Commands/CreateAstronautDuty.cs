@@ -1,134 +1,164 @@
-﻿using Dapper;
 using MediatR;
-using MediatR.Pipeline;
 using Microsoft.EntityFrameworkCore;
 using StargateAPI.Business.Data;
+using StargateAPI.Business.Validation;
 using StargateAPI.Controllers;
-using System.Net;
+using System.Text.Json.Serialization;
 
 namespace StargateAPI.Business.Commands
 {
-    public class CreateAstronautDuty : IRequest<CreateAstronautDutyResult>
+    public sealed class CreateAstronautDuty : IRequest<CreateAstronautDutyResult>
     {
-        public required string Name { get; set; }
+        /// <summary>Raw; the handler normalises.</summary>
+        public required string Name { get; init; }
 
-        public required string Rank { get; set; }
+        /// <summary>Raw; the handler normalises.</summary>
+        public required string Rank { get; init; }
 
-        public required string DutyTitle { get; set; }
+        /// <summary>Raw; the handler normalises.</summary>
+        public required string DutyTitle { get; init; }
 
-        public DateTime DutyStartDate { get; set; }
+        public required DateTime DutyStartDate { get; init; }
     }
 
-    public class CreateAstronautDutyPreProcessor : IRequestPreProcessor<CreateAstronautDuty>
+    public sealed class CreateAstronautDutyHandler : IRequestHandler<CreateAstronautDuty, CreateAstronautDutyResult>
     {
         private readonly StargateContext _context;
+        private readonly ILogger<CreateAstronautDutyHandler> _logger;
 
-        public CreateAstronautDutyPreProcessor(StargateContext context)
+        public CreateAstronautDutyHandler(StargateContext context, ILogger<CreateAstronautDutyHandler> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
-        public Task Process(CreateAstronautDuty request, CancellationToken cancellationToken)
-        {
-            var person = _context.People.AsNoTracking().FirstOrDefault(z => z.Name == request.Name);
-
-            if (person is null) throw new BadHttpRequestException("Bad Request");
-
-            var verifyNoPreviousDuty = _context.AstronautDuties.FirstOrDefault(z => z.DutyTitle == request.DutyTitle && z.DutyStartDate == request.DutyStartDate);
-
-            if (verifyNoPreviousDuty is not null) throw new BadHttpRequestException("Bad Request");
-
-            return Task.CompletedTask;
-        }
-    }
-
-    public class CreateAstronautDutyHandler : IRequestHandler<CreateAstronautDuty, CreateAstronautDutyResult>
-    {
-        private readonly StargateContext _context;
-
-        public CreateAstronautDutyHandler(StargateContext context)
-        {
-            _context = context;
-        }
         public async Task<CreateAstronautDutyResult> Handle(CreateAstronautDuty request, CancellationToken cancellationToken)
         {
+            var name = InputRules.Normalize(request.Name);
+            var rank = InputRules.Normalize(request.Rank);
+            var title = InputRules.Normalize(request.DutyTitle);
+            if (!InputRules.IsValidName(name) || !InputRules.IsValidName(rank) || !InputRules.IsValidName(title)
+                || !InputRules.IsValidDutyDate(request.DutyStartDate))
+            {
+                // Unreachable over HTTP (model validation runs first); guards other callers. Never includes a value.
+                throw new ArgumentException("Invalid duty request.", nameof(request));
+            }
 
-            var query = $"SELECT * FROM [Person] WHERE \'{request.Name}\' = Name";
+            var start = request.DutyStartDate.Date;
 
-            var person = await _context.Connection.QueryFirstOrDefaultAsync<Person>(query);
-
+            // The person is resolved exactly once. Every later read and write uses only person.Id, so the name can
+            // never widen the match, and every value below reaches SQLite as a parameter (EF LINQ only, no raw SQL).
+            var person = await _context.People.AsNoTracking()
+                .Where(p => EF.Functions.Collate(p.Name, "NOCASE") == name)
+                .OrderBy(p => p.Id)
+                .Select(p => new { p.Id, p.Name })
+                .FirstOrDefaultAsync(cancellationToken);
             if (person is null)
             {
+                _logger.LogInformation("Create duty rejected: {Reason}", "person not found");
                 return new CreateAstronautDutyResult
                 {
+                    Id = null,
+                    Name = null,
                     Success = false,
                     Message = "Person not found",
-                    ResponseCode = (int)HttpStatusCode.NotFound
+                    ResponseCode = StatusCodes.Status404NotFound
                 };
             }
 
-            query = $"SELECT * FROM [AstronautDetail] WHERE {person.Id} = PersonId";
-
-            var astronautDetail = await _context.Connection.QueryFirstOrDefaultAsync<AstronautDetail>(query);
-
-            if (astronautDetail == null)
+            // Scoped to this person; date part only; title compared ignoring ASCII case.
+            var duplicate = await _context.AstronautDuties.AsNoTracking().AnyAsync(d =>
+                d.PersonId == person.Id
+                && EF.Functions.Collate(d.DutyTitle, "NOCASE") == title
+                && d.DutyStartDate.Date == start, cancellationToken);
+            if (duplicate)
             {
-                astronautDetail = new AstronautDetail();
-                astronautDetail.PersonId = person.Id;
-                astronautDetail.CurrentDutyTitle = request.DutyTitle;
-                astronautDetail.CurrentRank = request.Rank;
-                astronautDetail.CareerStartDate = request.DutyStartDate.Date;
-                if (request.DutyTitle == "RETIRED")
+                _logger.LogInformation("Create duty rejected: {Reason} for person {PersonId}", "duplicate", person.Id);
+                return Conflict("A duty with this title and start date already exists for this person");
+            }
+
+            // Rules 3-7 as they behaved before this task (known defects are task 009's).
+            var detail = await _context.AstronautDetails.FirstOrDefaultAsync(d => d.PersonId == person.Id, cancellationToken);
+            if (detail is null)
+            {
+                detail = new AstronautDetail
                 {
-                    astronautDetail.CareerEndDate = request.DutyStartDate.Date;
+                    PersonId = person.Id,
+                    CurrentDutyTitle = title,
+                    CurrentRank = rank,
+                    CareerStartDate = start
+                };
+                if (title == "RETIRED")
+                {
+                    // Known defect (rule 7 says start minus 1 day), left for task 009.
+                    detail.CareerEndDate = start;
                 }
-
-                await _context.AstronautDetails.AddAsync(astronautDetail);
-
+                _context.AstronautDetails.Add(detail);
             }
             else
             {
-                astronautDetail.CurrentDutyTitle = request.DutyTitle;
-                astronautDetail.CurrentRank = request.Rank;
-                if (request.DutyTitle == "RETIRED")
+                detail.CurrentDutyTitle = title;
+                detail.CurrentRank = rank;
+                if (title == "RETIRED")
                 {
-                    astronautDetail.CareerEndDate = request.DutyStartDate.AddDays(-1).Date;
+                    detail.CareerEndDate = start.AddDays(-1);
                 }
-                _context.AstronautDetails.Update(astronautDetail);
             }
 
-            query = $"SELECT * FROM [AstronautDuty] WHERE {person.Id} = PersonId Order By DutyStartDate Desc";
-
-            var astronautDuty = await _context.Connection.QueryFirstOrDefaultAsync<AstronautDuty>(query);
-
-            if (astronautDuty != null)
+            // Id as tie-break so "the latest duty" is deterministic when two share a start date.
+            var latest = await _context.AstronautDuties
+                .Where(d => d.PersonId == person.Id)
+                .OrderByDescending(d => d.DutyStartDate)
+                .ThenByDescending(d => d.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (latest is not null)
             {
-                astronautDuty.DutyEndDate = request.DutyStartDate.AddDays(-1).Date;
-                _context.AstronautDuties.Update(astronautDuty);
+                latest.DutyEndDate = start.AddDays(-1);
             }
 
-            var newAstronautDuty = new AstronautDuty()
+            var duty = new AstronautDuty
             {
                 PersonId = person.Id,
-                Rank = request.Rank,
-                DutyTitle = request.DutyTitle,
-                DutyStartDate = request.DutyStartDate.Date,
+                Rank = rank,
+                DutyTitle = title,
+                DutyStartDate = start,
                 DutyEndDate = null
             };
+            _context.AstronautDuties.Add(duty);
 
-            await _context.AstronautDuties.AddAsync(newAstronautDuty);
-
-            await _context.SaveChangesAsync();
-
-            return new CreateAstronautDutyResult()
+            try
             {
-                Id = newAstronautDuty.Id
-            };
+                // One save: EF writes every row in a single transaction.
+                await _context.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException ex) when (SqliteErrors.IsUniqueViolation(ex))
+            {
+                // Two first duties for one person raced; IX_AstronautDetail_PersonId is the only unique index this write can hit.
+                _logger.LogInformation("Create duty rejected: {Reason} for person {PersonId}", "concurrent change", person.Id);
+                return Conflict("The person's duties were changed by another request");
+            }
+
+            _logger.LogInformation("Created duty {DutyId} for person {PersonId}", duty.Id, person.Id);
+            return new CreateAstronautDutyResult { Id = duty.Id, Name = person.Name, ResponseCode = StatusCodes.Status201Created };
         }
+
+        private static CreateAstronautDutyResult Conflict(string message) => new()
+        {
+            Id = null,
+            Name = null,
+            Success = false,
+            Message = message,
+            ResponseCode = StatusCodes.Status409Conflict
+        };
     }
 
-    public class CreateAstronautDutyResult : BaseResponse
+    public sealed class CreateAstronautDutyResult : BaseResponse
     {
+        /// <summary>The new duty's id on 201; null on 404 and 409.</summary>
         public int? Id { get; set; }
+
+        /// <summary>The person's stored name on 201, for the Location header only; null otherwise. Never serialised.</summary>
+        [JsonIgnore]
+        public string? Name { get; set; }
     }
 }

@@ -50,6 +50,20 @@ public sealed class PersonCreateKestrelTests
     }
 
     [Fact]
+    public async Task Q1k_TheRemovedPersonRoute_Is405WithAllowPutAndAnEmptyBody_OnRealKestrel()
+    {
+        using var db = new TestDatabase();
+        using var factory = StartKestrel(db, "Development", seed: true);
+        using var client = factory.CreateClient();
+
+        using var response = await client.GetAsync("/Person/Elena%20Vasquez");
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        Assert.Equal(new[] { "PUT" }, response.Content.Headers.Allow.ToArray());
+        Assert.Equal(string.Empty, await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
     public async Task K2_AnUnexpectedFault_InProduction_Is500WithoutInternalDetails()
     {
         using var db = new TestDatabase();

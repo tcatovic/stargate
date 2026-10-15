@@ -32,7 +32,7 @@ public class PersonControllerTests
     {
         using var db = PeopleFixture.Create();
 
-        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPeople(null, null, null, CancellationToken.None)));
+        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPeople(new GetPeople(), CancellationToken.None)));
 
         var body = Assert.IsType<GetPeopleResult>(result.Value);
         Assert.Equal(200, result.StatusCode);
@@ -46,39 +46,12 @@ public class PersonControllerTests
         using var db = PeopleFixture.Create();
 
         var byName = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
-            await WithController(db, c => c.GetPeople("priya raman", null, null, CancellationToken.None))).Value);
+            await WithController(db, c => c.GetPeople(new GetPeople { Name = "priya raman" }, CancellationToken.None))).Value);
         var combined = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
-            await WithController(db, c => c.GetPeople(null, "maj", "commander", CancellationToken.None))).Value);
+            await WithController(db, c => c.GetPeople(new GetPeople { Rank = "maj", DutyTitle = "commander" }, CancellationToken.None))).Value);
 
         Assert.Equal(["Priya Raman"], byName.People.Select(p => p.Name));
         Assert.Equal(["Elena Vasquez"], combined.People.Select(p => p.Name));
-    }
-
-    [Fact]
-    public async Task C3_GetPersonByName_Found_Is200()
-    {
-        using var db = PeopleFixture.Create();
-
-        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPersonByName("mira okafor", CancellationToken.None)));
-
-        var body = Assert.IsType<GetPersonByNameResult>(result.Value);
-        Assert.Equal(200, result.StatusCode);
-        Assert.Equal(200, body.ResponseCode);
-        Assert.Equal("Mira Okafor", body.Person?.Name);
-    }
-
-    [Fact]
-    public async Task C4_GetPersonByName_Unknown_Is404()
-    {
-        using var db = PeopleFixture.Create();
-
-        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPersonByName("Nobody", CancellationToken.None)));
-
-        var body = Assert.IsType<GetPersonByNameResult>(result.Value);
-        Assert.Equal(404, result.StatusCode);
-        Assert.Equal(404, body.ResponseCode);
-        Assert.False(body.Success);
-        Assert.Null(body.Person);
     }
 
     [Fact]
@@ -86,19 +59,21 @@ public class PersonControllerTests
     {
         using var db = new TestDatabase(); // not migrated: no tables
 
-        await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPeople(null, null, null, CancellationToken.None)));
-        await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPersonByName("x", CancellationToken.None)));
+        await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPeople(new GetPeople(), CancellationToken.None)));
     }
 
     private sealed class CapturingMediator : IMediator
     {
         public CancellationToken? Token { get; private set; }
+        public object? Request { get; private set; }
 
         public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
         {
             Token = cancellationToken;
+            Request = request;
             object result = request switch
             {
+                GetPeople => new GetPeopleResult(),
                 CreatePerson => new CreatePersonResult { Id = 1, Name = "Ada", ResponseCode = 201 },
                 UpdatePerson => new UpdatePersonResult(),
                 _ => throw new NotSupportedException(),
@@ -141,6 +116,19 @@ public class PersonControllerTests
 
         await new PersonController(mediator).UpdatePerson(1, new UpdatePersonRequest { Name = "Ada" }, cts.Token);
 
+        Assert.Equal(cts.Token, mediator.Token);
+    }
+
+    [Fact]
+    public async Task C8_GetPeople_SendsTheVeryObjectItWasBound_WithTheRequestsToken()
+    {
+        using var cts = new CancellationTokenSource();
+        var mediator = new CapturingMediator();
+        var query = new GetPeople { Name = "a", Rank = "b", DutyTitle = "c" };
+
+        await new PersonController(mediator).GetPeople(query, cts.Token);
+
+        Assert.Same(query, mediator.Request);
         Assert.Equal(cts.Token, mediator.Token);
     }
 }

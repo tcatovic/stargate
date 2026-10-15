@@ -61,40 +61,6 @@ public class ResponseShapeTests
         Assert.Equal(ended, Kinds(root.GetProperty("astronautDuties")[1]));
     }
 
-    [Theory]
-    [InlineData(true, JsonValueKind.Object)]
-    [InlineData(false, JsonValueKind.Null)]
-    public void GetPersonByNameResult_HasTheDocumentedShape_AndWritesNullPerson(bool withPerson, JsonValueKind expectedPersonKind)
-    {
-        var result = new GetPersonByNameResult
-        {
-            Person = withPerson ? new PersonAstronaut { PersonId = 1, Name = "Mira Okafor" } : null
-        };
-
-        using var json = JsonDocument.Parse(JsonSerializer.Serialize(result, Web));
-
-        Assert.Equal(WithEnvelope(("person", expectedPersonKind)), Kinds(json.RootElement));
-        if (withPerson)
-        {
-            Assert.Equal(PersonShape(JsonValueKind.Null, JsonValueKind.Null), Kinds(json.RootElement.GetProperty("person")));
-        }
-    }
-
-    [Fact]
-    public async Task S1_NotFoundResult_FromTheRealHandler_HasTheDocumentedShape()
-    {
-        using var db = new TestDatabase();
-        db.Migrate();
-        using var context = db.CreateContext();
-
-        var result = await new GetPersonByNameHandler(context).Handle(new GetPersonByName { Name = "Nobody" }, CancellationToken.None);
-
-        using var json = JsonDocument.Parse(JsonSerializer.Serialize(result, Web));
-        var root = json.RootElement;
-        Assert.Equal(Expect(("person", JsonValueKind.Null), ("success", JsonValueKind.False), ("message", JsonValueKind.String), ("responseCode", JsonValueKind.Number)), Kinds(root));
-        Assert.Equal(404, root.GetProperty("responseCode").GetInt32());
-    }
-
     [Fact]
     public void CreateAstronautDutyResult_HasTheDocumentedShape_AndNeverSerialisesTheName()
     {

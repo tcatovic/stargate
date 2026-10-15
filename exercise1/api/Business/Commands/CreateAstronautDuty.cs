@@ -74,7 +74,7 @@ namespace StargateAPI.Business.Commands
             // never widen the match, and every value below reaches SQLite as a parameter (EF LINQ only, no raw SQL).
             var person = await _context.People.AsNoTracking()
                 .Where(p => EF.Functions.Collate(p.Name, "NOCASE") == name)
-                // Same order as GetPersonByName and GetAstronautDutiesByName: an exact-case match first, then the lowest Id
+                // Same order as GetAstronautDutiesByName: an exact-case match first, then the lowest Id
                 // (names are only unique ignoring case once AddUniquePersonNameIndex has been applied).
                 .OrderBy(p => EF.Functions.Collate(p.Name, "BINARY") == name ? 0 : 1)
                 .ThenBy(p => p.Id)

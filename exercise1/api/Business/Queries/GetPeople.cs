@@ -1,21 +1,31 @@
 using Dapper;
 using MediatR;
+using Microsoft.AspNetCore.Mvc;
 using StargateAPI.Business.Data;
 using StargateAPI.Business.Dtos;
 using StargateAPI.Business.Validation;
 using StargateAPI.Controllers;
+using System.ComponentModel;
 
 namespace StargateAPI.Business.Queries
 {
+    /// <summary>
+    /// The one definition of the people filters: bound from the query string by MVC and sent to MediatR as is.
+    /// Each value is trimmed of ASCII whitespace and then checked against the shared name rule, like the write endpoints.
+    /// Null, empty or whitespace-only (MVC binds those to null) means no filter.
+    /// </summary>
     public class GetPeople : IRequest<GetPeopleResult>
     {
-        /// <summary>Case-insensitive exact match on the full name; null, empty or whitespace means no filter.</summary>
+        [FromQuery(Name = "name"), ValidName]
+        [Description("Case-insensitive exact match on the person's full name. Empty or whitespace-only means no filter.")]
         public string? Name { get; init; }
 
-        /// <summary>Case-insensitive exact match on the current rank; null, empty or whitespace means no filter.</summary>
+        [FromQuery(Name = "rank"), ValidName]
+        [Description("Case-insensitive exact match on the current rank (e.g. MAJ). Excludes people with no assignment.")]
         public string? Rank { get; init; }
 
-        /// <summary>Case-insensitive exact match on the current duty title; null, empty or whitespace means no filter.</summary>
+        [FromQuery(Name = "dutyTitle"), ValidName]
+        [Description("Case-insensitive exact match on the current duty title (e.g. Commander, RETIRED). Excludes people with no assignment.")]
         public string? DutyTitle { get; init; }
     }
 

@@ -63,7 +63,6 @@ public sealed class NameRuleHttpTests : IDisposable
         var requests = new[]
         {
             ("name", await Send(HttpMethod.Get, "/Person?name=" + escaped)),
-            ("name", await Send(HttpMethod.Get, "/Person/" + escaped)),
             ("Name", await Send(HttpMethod.Put, $"/Person/{mira}", NameJson(value))),
         };
 

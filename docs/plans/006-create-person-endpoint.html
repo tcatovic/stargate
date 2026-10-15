@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 006: Make POST /Person a proper, validated create endpoint</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.5rem; margin:.4rem 0; } h2 { font-size:1.15rem; margin:1.8rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  h3 { font-size:1rem; margin:1.2rem 0 .3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 006 &middot; plan revision 1 &middot; baseline <code>main</code> at <code>f42dc41</code> (tasks 001-005 merged) &middot; branch <code>task/006-create-person-endpoint</code> &middot; status: awaiting approval together with <a href="../contracts/006/contract.html">contract 006</a></p>
+<h1>Plan 006: Make POST /Person a proper, validated create endpoint</h1>
+
+<h2>1. Summary and verdict</h2>
+<p><code>POST /Person</code> will take a JSON object <code>{ "name": "..." }</code>. On success it returns <strong>201 Created</strong> with <code>{ id, success, message, responseCode }</code> and a <code>Location</code> header. Validation reuses the shared name rule from task 002 unchanged: the same <code>[ValidName]</code> attribute, and the same <code>InputRules.Normalize</code> (NFC, then trim) in the handler. Invalid input returns 400. A duplicate returns 409, whether a pre-check in the handler catches it or the unique index (<code>SqliteErrors.IsUniqueViolation</code>) does. The pipeline gives 415 and 413 exactly as it does for <code>PUT</code>. The controller <code>try/catch</code> that returns <code>ex.Message</code> is removed, and the dead <code>CreatePersonPreProcessor</code> is deleted. The UI client gets <code>StargateApi.createPerson(name)</code>, which emits typed outcomes. There is no schema change.</p>
+<div class="card ok"><p><strong>Verdict: <code>multi</code></strong> (api + ui, joined by an HTTP contract; same shape as 002). The UI part is one client method, three types and Vitest tests. It depends only on the wire contract, so ui-dev can build it in parallel against <a href="../contracts/006/">docs/contracts/006/</a> without waiting for the API. There is no db subtask: the unique index and the name rule already exist on <code>main</code>.</p></div>
+<p><strong>The problem is real.</strong> I checked every bullet in the task against <code>main</code> and all of them hold. Two details in the task need correcting:</p>
+<ul>
+<li>The acceptance criterion says the new person appears with "null rank, duty title". On the wire, <code>currentRank</code> and <code>currentDutyTitle</code> are <strong>empty strings</strong> for an unassigned person (<code>PersonAstronaut.cs</code> defaults them to <code>string.Empty</code>; contract 002 and test <code>P1</code> pin <code>""</code>). Only <code>careerStartDate</code> and <code>careerEndDate</code> are <code>null</code>. The tests assert that real shape.</li>
+<li>"Missing body returns 400" applies only when the request still says it is JSON. A request with <strong>no Content-Type at all</strong> is rejected by <code>[Consumes]</code> with 415 before binding runs, the same as <code>PUT</code> (contract 002, Amendment 1). See 4.3.</li>
+</ul>
+
+<h2>2. Current behaviour (main @ f42dc41)</h2>
+<div class="table-wrap"><table>
+<tr><th>Where</th><th>What happens today</th></tr>
+<tr><td><code>exercise1/api/Controllers/PersonController.cs:102-103</code></td><td><code>[HttpPost("")] CreatePerson([FromBody] string name)</code>. The body must be a bare JSON string. There is no <code>[Consumes]</code>, no size limit, no Swagger attributes and no <code>CancellationToken</code>.</td></tr>
+<tr><td><code>PersonController.cs:114-120</code></td><td><code>catch (Exception ex)</code> returns 500 with <code>Message = ex.Message</code>. Since task 002, a duplicate returns 500 with <em>"An error occurred while saving the entity changes. See the inner exception for details."</em> (README changelog line 124, verified by 002 QA).</td></tr>
+<tr><td><code>Business/Commands/CreatePerson.cs:14-29</code></td><td><code>CreatePersonPreProcessor</code>: a synchronous, case-sensitive, untrimmed <code>==</code> check that throws <code>BadHttpRequestException</code>. It is never registered (<code>Program.cs:31</code> registers only <code>CreateAstronautDutyPreProcessor</code>). The 002 QA observation above confirms it never runs: if it did, the 500 would say "Bad Request".</td></tr>
+<tr><td><code>CreatePerson.cs:31-56</code></td><td>The handler stores <code>request.Name</code> as given: no trim, no NFC, no validation, and no <code>CancellationToken</code> passed to <code>AddAsync</code> or <code>SaveChangesAsync</code>. It returns <code>CreatePersonResult { Id }</code> with HTTP 200. It only adds a <code>Person</code>, so rule 2 holds by construction.</td></tr>
+<tr><td><code>CreatePerson.cs:59-62</code></td><td><code>CreatePersonResult : BaseResponse { int Id }</code>.</td></tr>
+<tr><td><code>PersonController.cs:73-100</code>, <code>UpdatePerson.cs</code></td><td>The template to follow. The PUT action has <code>[Consumes("application/json")]</code>, <code>[RequestSizeLimit(4096)]</code>, a request DTO with <code>[Required, ValidName]</code>, and a handler that runs raw-length guard, then <code>InputRules.Normalize</code>, then <code>IsValidName</code>, then a <code>NOCASE</code> pre-check (409), then save with <code>IsUniqueViolation</code> mapped to 409. Logs carry the id and outcome, never the name.</td></tr>
+<tr><td><code>Program.cs:9-19</code></td><td>Binding messages that do not echo input are already configured globally, so a new body DTO inherits them.</td></tr>
+<tr><td><code>Business/Queries/GetPeople.cs:26-33, 44-48</code></td><td><code>GET /Person?name=</code> is today a case-insensitive <em>contains</em> match (<code>LIKE</code> with escaping) on the NFC-normalised, trimmed value. Task 008 (ready) makes it an exact, case-insensitive match and removes <code>GET /Person/{name}</code>.</td></tr>
+<tr><td><code>exercise1/ui/src/app/api/stargate-api.ts</code>, <code>models.ts</code></td><td>The UI has no <code>createPerson</code>. <code>updatePerson</code> and <code>UpdatePersonOutcome</code> are the pattern to mirror. <code>extractErrors</code> is already a module-level helper that can be reused.</td></tr>
+<tr><td><code>exercise1/api.Tests</code></td><td>No test exercises <code>POST /Person</code> or <code>CreatePerson</code> (grep), so no existing test has to change.</td></tr>
+</table></div>
+
+<h2>3. Probe run (1 of 3; scratch only, removed afterwards)</h2>
+<div class="card warn"><p><strong>Kestrel and a non-ASCII <code>Location</code>.</strong> I wrote a scratch minimal app on the .NET 10 SDK and served it with real Kestrel:</p>
+<ul>
+<li>Setting <code>Location: /Person?name=Zoë</code> returned <strong>HTTP 500</strong> and logged <code>InvalidOperationException: Invalid non-ASCII or control character in header: 0x00EB</code>.</li>
+<li><code>Uri.EscapeDataString("O'Brien Zoë Jr.-x")</code> produced <code>O%27Brien%20Zo%C3%AB%20Jr.-x</code>, which Kestrel sent with 201.</li>
+</ul>
+<p>Why this matters: the header is written <em>after</em> the handler has committed the row. An unescaped <code>Location</code> would therefore store the person and then answer 500, and a retry would get 409. The in-memory TestServer does not validate header characters, so only a Kestrel-hosted test (pattern: <code>PersonHttpProductionTests</code>, <code>factory.UseKestrel(0)</code>) or QA can catch it. Escaping is mandatory and is tested on Kestrel (K1).</p></div>
+<p>Facts taken from merged tests rather than probes:</p>
+<ul>
+<li>A bare JSON string sent with <code>application/json</code> to an object-typed <code>[FromBody]</code> returns <strong>400</strong> without echoing the value (<code>PersonUpdateHttpTests.P7</code>, <code>"\"Tokenabc\""</code>). With <code>text/plain</code> it returns <strong>415</strong> (<code>P9</code>).</li>
+<li>An empty body with a JSON content type returns 400 (<code>P7</code>, <code>""</code>).</li>
+<li>Production 500s have an empty body when served by Kestrel (<code>PersonHttpProductionTests</code>).</li>
+</ul>
+
+<h2>4. Approach</h2>
+<h3>4.1 Request, handler, result (<code>Business/Commands/CreatePerson.cs</code>)</h3>
+<ul>
+<li><strong>New <code>CreatePersonRequest</code></strong> (the HTTP body): <code>[Required, ValidName] public string? Name { get; init; }</code>. This is the same attribute as <code>UpdatePersonRequest</code>, so the rule is not duplicated. Unknown properties are ignored.</li>
+<li><strong><code>CreatePerson</code></strong> (the MediatR request) keeps <code>required string Name</code>, carrying the raw value. The handler normalises it, exactly like <code>UpdatePerson</code>.</li>
+<li><strong>Handler order</strong>, mirroring <code>UpdatePersonHandler</code>:
+  <ol>
+    <li>Raw length above <code>InputRules.MaxRawLength</code> makes the name empty. Otherwise <code>InputRules.Normalize</code>.</li>
+    <li>If <code>!IsValidName</code>, throw <code>ArgumentException("Invalid name.")</code>. This is unreachable over HTTP and never includes the value.</li>
+    <li>Pre-check <code>AnyAsync(p =&gt; EF.Functions.Collate(p.Name, "NOCASE") == name)</code>. If a match exists, return 409.</li>
+    <li><code>People.Add</code>, then <code>SaveChangesAsync(ct)</code>. Catch <code>DbUpdateException</code> when <code>SqliteErrors.IsUniqueViolation</code> and return 409. Any other exception propagates.</li>
+    <li>Log <code>Created person {PersonId}</code>. Return 201.</li>
+  </ol>
+  The <code>CancellationToken</code> flows through every call.</li>
+<li><strong><code>CreatePersonResult</code></strong>:
+  <ul>
+    <li><code>int? Id</code>: set on 201, <code>null</code> on 409. The field name stays <code>id</code>, as the task decided.</li>
+    <li><code>[JsonIgnore] string? Name</code>: the stored name, used only by the controller to build <code>Location</code>. It is never serialised.</li>
+    <li>201 sets <code>message "Successful"</code>. 409 sets <code>success false</code> and <code>message "A person with this name already exists"</code>, the same text as PUT.</li>
+  </ul></li>
+<li><strong>Delete <code>CreatePersonPreProcessor</code></strong> (see 4.4).</li>
+</ul>
+<h3>4.2 Controller action</h3>
+<ul>
+<li>Attributes: <code>[HttpPost("")]</code>, <code>[Consumes("application/json")]</code> and <code>[RequestSizeLimit(4096)]</code>.</li>
+<li>Swagger metadata: <code>[EndpointSummary("Create a person")]</code> and <code>[EndpointDescription(...)]</code>.</li>
+<li><code>[ProducesResponseType]</code> entries: 201 <code>CreatePersonResult</code>, 400 <code>ValidationProblemDetails</code>, 409 <code>CreatePersonResult</code>, 415 <code>ProblemDetails</code>, and 500 with no type.</li>
+<li>Signature: <code>CreatePerson([FromBody] CreatePersonRequest request, CancellationToken cancellationToken)</code>. It sends <code>new CreatePerson { Name = request.Name ?? string.Empty }</code>.</li>
+<li>On a 201 result it returns <code>Created(location, result)</code>. Otherwise it returns <code>this.GetResponse(result)</code>.</li>
+<li>No <code>try/catch</code>. <code>Location</code> is built by one private static helper: <code>"/Person?name=" + Uri.EscapeDataString(storedName)</code> (see 4.5).</li>
+</ul>
+<p>The status always matches <code>responseCode</code>. <code>Created()</code> writes 201 and the handler sets <code>ResponseCode = 201</code>.</p>
+<h3>4.3 Order of checks and status codes (same as PUT)</h3>
+<div class="table-wrap"><table>
+<tr><th>Situation</th><th>Status</th><th>Who decides</th></tr>
+<tr><td>Content-Type present and not JSON (for example <code>text/plain</code>, including a bare string sent as text)</td><td>415, empty body</td><td>endpoint routing (<code>[Consumes]</code>)</td></tr>
+<tr><td>No Content-Type header (including a request with no body at all)</td><td>415, ProblemDetails</td><td><code>[Consumes]</code> filter</td></tr>
+<tr><td>Body over 4096 bytes</td><td>413 on Kestrel (TestServer: 400 from the 800-character raw bound)</td><td><code>[RequestSizeLimit]</code></td></tr>
+<tr><td>JSON content type with: empty body; bare string <code>"Ada"</code>; <code>[]</code>; malformed JSON; <code>name</code> not a string; <code>name</code> null or missing; blank; more than 100 characters after normalising; more than 800 raw; outside the character rule</td><td>400 <code>ValidationProblemDetails</code>, no echo</td><td>model binding and validation</td></tr>
+<tr><td>Name taken (ignoring ASCII case, after NFC and trim)</td><td>409, <code>id: null</code>, no <code>Location</code></td><td>handler pre-check or unique index</td></tr>
+<tr><td>Success</td><td>201 + <code>Location</code></td><td>handler + controller</td></tr>
+<tr><td>Unexpected fault</td><td>500. Production: empty body, logged by the host. Development: developer exception page.</td><td>host (no try/catch), as decided in 001 D2b</td></tr>
+</table></div>
+<h3>4.4 One duplicate-check mechanism: delete the pre-processor</h3>
+<p>Decision: <strong>delete <code>CreatePersonPreProcessor</code></strong> and keep the check in the handler, as PUT does. Registering the pre-processor instead was rejected for three reasons:</p>
+<ol>
+<li>A MediatR pre-processor cannot return a result. It can only throw. Turning that throw into 409 would need an exception-to-status mapping (a global exception handler), which this task explicitly leaves out of scope.</li>
+<li>The race path (unique index violation at <code>SaveChanges</code>) has to be caught in the handler anyway. A pre-processor would split one rule across two places.</li>
+<li>PUT already uses handler-level checks (<code>UpdatePerson.cs</code>). Two mechanisms for the same rule in the same controller would diverge.</li>
+</ol>
+<p>When a global exception handler and a validation pipeline behaviour arrive (CLAUDE.md standard), both handlers can move together. That is a separate refactor. <code>Program.cs</code> needs no change; the <code>MediatR.Pipeline</code> using in <code>CreatePerson.cs</code> goes with the class. <span class="tag warn">note</span> <code>CLAUDE.md</code>'s layout line still says "pre-processors (CreatePerson)". Agents may not edit <code>CLAUDE.md</code>, so I leave that for the user.</p>
+<h3>4.5 The <code>Location</code> header: recommend <code>/Person?name=&lt;encoded&gt;</code> (changes a task decision; see Question 1)</h3>
+<p>The task decided <code>Location: /Person/{name}</code>. Task 008 (ready, depends on 001 and 007) deletes <code>GET /Person/{name}</code>, and after that the route returns a plain routing 404. A <code>Location</code> built now would then point at nothing. The 008 developers might not notice, because nothing <em>reads</em> <code>Location</code> in the repo.</p>
+<div class="table-wrap"><table>
+<tr><th>Option</th><th>Today (before 008)</th><th>After 008</th><th>Trade-off</th></tr>
+<tr><td><strong><code>/Person?name=&lt;EscapeDataString(stored)&gt;</code></strong> (recommended)</td><td>200 <code>GetPeopleResult</code>. Contains match, so it lists the new person plus anyone whose name contains it (for example <code>Ada</code> also lists <code>Adam Ray</code>). The stored name always passes the read-side rule, so it is never a 400.</td><td>200 with exactly that person (exact, case-insensitive, trimmed).</td><td>Never dangles. It identifies a filtered collection rather than a single-resource URI, which is weaker REST semantics, but it is the only by-name lookup that survives 008. No change is needed in 008.</td></tr>
+<tr><td><code>/Person/{EscapeDataString(stored)}</code> (task decision)</td><td>200 <code>GetPersonByNameResult</code> for exactly that person.</td><td><strong>404</strong> (route removed).</td><td>Accurate single-resource URI today. Dangles after 008, unless 008 also changes the header (a cross-task edit that is easy to forget).</td></tr>
+<tr><td><code>/Person/{id}</code></td><td>No such route (a 400 from the <code>{name}</code> route's validation, or a match on a person named "7").</td><td>404.</td><td>Ideal, but the route is a separate task by decision.</td></tr>
+</table></div>
+<p><strong>Call: <code>/Person?name=</code>.</strong> The contract is written that way. If the user keeps the original decision, only the prefix in one helper and the expected header in tests P1-P3 and K1 change. The UI never reads <code>Location</code>, so ui-dev is unaffected either way.</p>
+<ul>
+<li>The value is relative (RFC 9110 allows that). Resolved against the API base, it gives <code>/api/Person?...</code> behind the dev proxy.</li>
+<li>Encoding uses <code>Uri.EscapeDataString</code>: RFC 3986 unreserved characters stay, everything else is percent-encoded as UTF-8. Space becomes <code>%20</code>, apostrophe <code>%27</code>, <code>ë</code> <code>%C3%AB</code>, and the result is ASCII only.</li>
+<li>The stored (normalised) name is what gets encoded, never the raw input.</li>
+</ul>
+<h3>4.6 Interplay with task 002's accepted interim behaviour</h3>
+<div class="table-wrap"><table>
+<tr><th>Input</th><th>Before (main)</th><th>After 006</th></tr>
+<tr><td>Duplicate <code>"Ada"</code> after <code>Ada</code></td><td>500 with EF's "An error occurred while saving..." message</td><td>409 <code>{ id: null, success: false, message: "A person with this name already exists", responseCode: 409 }</code></td></tr>
+<tr><td><code>"Ada "</code>, <code>" ADA"</code> after <code>Ada</code></td><td>200 and a second, padded row (<code>"Ada "</code> is not NOCASE-equal to <code>Ada</code>)</td><td>409, nothing stored</td></tr>
+<tr><td><code>"Ada"</code> padded with NBSP or ideographic space</td><td>200, stored padded</td><td>409 if <code>Ada</code> exists; otherwise 201 and stored as <code>Ada</code></td></tr>
+<tr><td>NFD <code>Rene&#x301;e</code> after NFC <code>Renée</code></td><td>200, a visually identical second person</td><td>409</td></tr>
+<tr><td><code>""</code>, <code>"&lt;script&gt;"</code>, a 5000-character name, <code>Ada&lt;U+3164&gt;</code></td><td>200 and stored</td><td>400 (or 413 on Kestrel for an oversized body), nothing stored</td></tr>
+</table></div>
+<p>README changelog: add a Task 006 <strong>BREAKING</strong> entry at the top. Append <em>"Superseded by task 006."</em> to the existing "Task 002 (BEHAVIOUR CHANGE, interim until task 006)" item, rather than deleting it (it is history). Exact wording: <a href="../contracts/006/data.md">data.md</a> section "README".</p>
+<h3>4.7 Main alternative rejected</h3>
+<p><strong>Accept both body shapes (bare string and object) for one release.</strong> Rejected because the task decided a clean break, nothing in the repo calls the bare-string form, and a dual-shape binder needs a custom input formatter or <code>JsonElement</code> parsing, which would bypass the shared <code>[ValidName]</code> model validation. A second alternative, a 422 for rule violations, is not used: PUT uses 400 and 409, and CLAUDE.md lists 422 only as optional.</p>
+
+<h2>5. Changes by platform</h2>
+<h3>api (api-dev)</h3>
+<ul>
+<li><code>exercise1/api/Business/Commands/CreatePerson.cs</code>:
+  <ul>
+    <li>Rewrite as in 4.1: <code>CreatePersonRequest</code>, sealed <code>CreatePerson</code>, <code>CreatePersonHandler</code> with an <code>ILogger</code>, and <code>CreatePersonResult</code> with <code>int? Id</code> and a <code>[JsonIgnore] Name</code>.</li>
+    <li>Delete <code>CreatePersonPreProcessor</code> and the <code>MediatR.Pipeline</code> using.</li>
+  </ul></li>
+<li><code>exercise1/api/Controllers/PersonController.cs</code>: replace the POST action (lines 102-125) as in 4.2. Remove the <code>using System.Net</code> only if it becomes unused (it does once the catch goes).</li>
+<li><code>exercise1/api/Program.cs</code>: no change.</li>
+<li><code>exercise1/api/README.md</code>: changelog entries (4.6).</li>
+<li>Tests, new files:
+  <ul>
+    <li><code>exercise1/api.Tests/CreatePersonHandlerTests.cs</code></li>
+    <li><code>PersonCreateHttpTests.cs</code></li>
+    <li><code>PersonCreateKestrelTests.cs</code></li>
+  </ul>
+  Move <code>RenameOnAnotherConnection</code> and <code>ThrowOnSave</code> from <code>UpdatePersonHandlerTests.cs</code> into <code>TestDoubles.cs</code> (rename the first to <code>SqlOnAnotherConnectionBeforeSave</code>) so both handler test classes share them.</li>
+</ul>
+<h3>ui (ui-dev)</h3>
+<ul>
+<li><code>exercise1/ui/src/app/api/models.ts</code>:
+  <ul>
+    <li>Add <code>CreatePersonRequest</code>, <code>CreatePersonResult</code> and <code>CreatePersonOutcome</code>, exactly as in <a href="../contracts/006/types.ts">types.ts</a>.</li>
+    <li>Extend the <code>ValidationProblemDetails</code> doc comment to mention <code>POST /Person</code>.</li>
+  </ul></li>
+<li><code>exercise1/ui/src/app/api/stargate-api.ts</code>: add <code>createPerson(name)</code> (POST <code>/api/Person</code>), reusing <code>extractErrors</code>.</li>
+<li><code>exercise1/ui/src/app/api/stargate-api.spec.ts</code>: add a <code>describe('createPerson')</code> block (tests.md U1-U9).</li>
+<li>No component or screen changes.</li>
+</ul>
+<h3>db, infra</h3>
+<p>None. No migration and no change to the model snapshot. <code>dotnet ef migrations has-pending-model-changes</code> must still report no changes.</p>
+
+<h2>6. Contracts affected</h2>
+<div class="table-wrap"><table>
+<tr><th>Contract</th><th>Change</th><th></th></tr>
+<tr><td><code>POST /Person</code> request</td><td>Bare JSON string replaced by <code>{ "name": string }</code>. A bare string now returns 400 (JSON content type) or 415 (other content type).</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>POST /Person</code> success</td><td>200 becomes <strong>201</strong>. <code>responseCode</code> is 201. New <code>Location: /Person?name=...</code>. The body is still <code>{ id, success, message, responseCode }</code>.</td><td><span class="tag bad">breaking</span> (status)</td></tr>
+<tr><td><code>POST /Person</code> duplicate</td><td>500 with an EF message (or 200 and a duplicate row for padded or NFD names) becomes <strong>409</strong> with <code>id: null</code>.</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>POST /Person</code> invalid</td><td>200 and stored becomes 400 <code>ValidationProblemDetails</code>. Also new: 415 and 413.</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>POST /Person</code> 500</td><td>A <code>BaseResponse</code> carrying <code>ex.Message</code> becomes an empty body (Production).</td><td><span class="tag bad">breaking (error path)</span></td></tr>
+<tr><td><code>CreatePersonResult.id</code></td><td><code>int</code> becomes <code>int?</code>: always a number on 201, <code>null</code> on 409.</td><td><span class="tag warn">widened</span></td></tr>
+<tr><td>Other endpoints, schema, migrations</td><td>Unchanged.</td><td><span class="tag ok">none</span></td></tr>
+</table></div>
+<p>Full detail: <a href="../contracts/006/openapi.yaml">openapi.yaml</a>, <a href="../contracts/006/data.md">data.md</a>, <a href="../contracts/006/types.ts">types.ts</a>.</p>
+
+<h2>7. Domain rules</h2>
+<ul>
+<li><strong>Rule 1 (a Person is uniquely identified by Name).</strong>
+  <ul>
+    <li>In code: <code>Normalize</code> (NFC and trim) runs before the comparison and before storage. A <code>NOCASE</code> pre-check gives a fast 409.</li>
+    <li>In the database: the existing unique index <code>IX_Person_Name</code> on the <code>COLLATE NOCASE</code> column is the guarantee. When a concurrent insert loses, it surfaces as <code>IsUniqueViolation</code> and maps to 409, never 500 and never two rows.</li>
+    <li>Known limits, unchanged from 002: case folding is ASCII-only, and compatibility characters and look-alikes are not unified (Question 2).</li>
+  </ul></li>
+<li><strong>Rule 2 (no assignment means no astronaut rows).</strong> The handler adds only a <code>Person</code> and never touches <code>AstronautDetail</code> or <code>AstronautDuty</code>. Tests compare dumps of both tables before and after (H9, P14). The new person is then listed by <code>GET /Person</code> with <code>""</code> rank and title and <code>null</code> dates.</li>
+<li>Rules 3-7 are not touched.</li>
+</ul>
+
+<h2>8. Tests</h2>
+<p>The complete list, as Given/When/Then, is in <a href="../contracts/006/tests.md">tests.md</a>. Highlights:</p>
+<ul>
+<li><strong>Handler</strong> (<code>TestDatabase</code>, seeded):
+  <ul>
+    <li>Create, trim (including NBSP and U+3000), NFD stored as NFC.</li>
+    <li>Duplicates: exact, case, whitespace and NFD give 409, and the INSERT is never attempted on the pre-check path.</li>
+    <li>The race path, via an interceptor that inserts the same name on another connection before the save, gives 409.</li>
+    <li>A foreign-key or other <code>DbUpdateException</code> is not mapped to 409.</li>
+    <li>A direct invalid name or an overlong raw name throws <code>ArgumentException</code>.</li>
+    <li>Rule 2: the dumps are unchanged.</li>
+    <li>Logs never contain the name; cancellation stores nothing.</li>
+  </ul></li>
+<li><strong>HTTP</strong> (<code>WebApplicationFactory</code>, Development):
+  <ul>
+    <li>201 body keys exactly <code>id, message, responseCode, success</code>, plus the <code>Location</code> value, and the GET of that <code>Location</code> returns the new person.</li>
+    <li>The 409 envelope, with no <code>Location</code>.</li>
+    <li>The full PUT invalid-name list sent through POST, plus body-shape failures including the bare string, with no echo.</li>
+    <li>415, and 413-or-400 for an oversized body.</li>
+    <li>U+180E at the edges, unknown properties ignored, and hostile but valid input (<code>O'Brien</code>).</li>
+    <li>6 parallel POSTs of case and whitespace variants, 5 rounds: exactly one 201, five 409s, one row.</li>
+    <li>Swagger document.</li>
+  </ul></li>
+<li><strong>Kestrel</strong> (<code>UseKestrel(0)</code>):
+  <ul>
+    <li>A non-ASCII name gives 201 with an ASCII <code>Location</code> (the probe failure mode).</li>
+    <li>A Production database fault gives a 500 with no internals and no echo.</li>
+    <li>A body over 4096 bytes gives 413.</li>
+  </ul></li>
+<li><strong>UI</strong> (Vitest + <code>HttpTestingController</code>):
+  <ul>
+    <li>Exactly one POST <code>/api/Person</code> with body <code>{ name }</code>, the name unmodified.</li>
+    <li>201 emits <code>created</code> with the id.</li>
+    <li>A malformed id errors.</li>
+    <li>409 emits <code>conflict</code>.</li>
+    <li>400 emits <code>invalid</code>, including null and odd bodies.</li>
+    <li>415, 500 and network errors propagate.</li>
+  </ul></li>
+<li><strong>Mutation targets</strong>, each of which must fail at least one test (tests.md "Mutation targets"):
+  <ul>
+    <li>Drop <code>Normalize</code>.</li>
+    <li>Drop the <code>NOCASE</code> collate in the pre-check.</li>
+    <li>Drop the pre-check entirely (caught by H4's no-INSERT assertion).</li>
+    <li>Widen <code>IsUniqueViolation</code> to any <code>DbUpdateException</code>.</li>
+    <li>Remove <code>EscapeDataString</code>.</li>
+    <li>Return 200 instead of 201.</li>
+    <li>Drop <code>[JsonIgnore]</code>.</li>
+    <li>Drop <code>[Consumes]</code>.</li>
+    <li>Drop <code>[RequestSizeLimit]</code>.</li>
+    <li>Drop the raw-length guard.</li>
+    <li>Add an <code>AstronautDetail</code> insert.</li>
+    <li>Log the name.</li>
+  </ul></li>
+</ul>
+<h3>What QA must check on the real API (fresh seeded Development DB: delete <code>starbase.db*</code>, then <code>dotnet run</code>)</h3>
+<ol>
+<li><code>POST /Person {"name":"Ada Lovelace"}</code> returns 201 with <code>Location: /Person?name=Ada%20Lovelace</code> and body <code>{ id: 7, success: true, message: "Successful", responseCode: 201 }</code> (7 because 6 people are seeded). <code>GET</code> of the <code>Location</code> lists her.</li>
+<li><code>"Zoë O'Brien"</code> returns 201 and <code>Location: /Person?name=Zo%C3%AB%20O%27Brien</code>, not a 500.</li>
+<li>A bare string <code>"Ada"</code> with <code>application/json</code> gives 400. With <code>text/plain</code> it gives 415 with an empty body. With no Content-Type it gives 415 ProblemDetails.</li>
+<li>Duplicates give 409, with <code>id: null</code>, no <code>Location</code>, and one row:
+  <ul>
+    <li><code>Mira Okafor</code></li>
+    <li><code>mira okafor</code></li>
+    <li><code>"  MIRA OKAFOR "</code></li>
+    <li>NBSP-padded</li>
+    <li>NFD <code>Renée</code> after creating <code>Renée</code></li>
+  </ul></li>
+<li>Invalid names (the PUT list) give 400 without echo, and nothing is stored.</li>
+<li>Payload size:
+  <ul>
+    <li>A name of 3000 characters gives 400.</li>
+    <li>A body over 4096 bytes gives 413.</li>
+  </ul></li>
+<li>10 parallel <code>curl</code> POSTs of the same new name give one 201 and nine 409s.</li>
+<li>Rule 2: <code>AstronautDetail</code>/<code>AstronautDuty</code> counts are unchanged (<code>sqlite3</code>). <code>GET /Person</code> shows the new person with <code>""</code> rank and title and <code>null</code> dates.</li>
+<li>No exception text in a 500 body. Run as Production (<code>--no-launch-profile</code>) against an unmigrated file. The body is empty, and the console logs the error without the name.</li>
+<li>Swagger <code>/swagger</code> shows the POST with the request schema and 201/400/409/415/500.</li>
+</ol>
+
+<h2>9. Risks and rollout</h2>
+<ul>
+<li><strong>Breaking for external callers</strong>: body shape, 200 to 201, and 409. Accepted by the user. Called out in the README changelog.</li>
+<li><strong>Non-ASCII <code>Location</code></strong>: covered by escaping and the Kestrel test. A regression would mean a stored row behind a 500.</li>
+<li><strong>Legacy NFD rows</strong>: the 002 migration did not NFC-normalise existing names. A database that already holds an NFD name will accept its NFC twin. Seeded and new databases are not affected, and rows written since 002 are NFC. Accepted in 002; no new action.</li>
+<li><strong>Compatibility characters and look-alikes</strong> (<code>Ａｄａ</code>, ligatures, Cyrillic <code>а</code>): they pass the rule and are distinct names. That was already true for rename; create now makes it reachable by a new route. Question 2.</li>
+<li><strong>Development 500 page</strong>: the developer exception page shows the stack in Development only, as accepted in 001 and 002. Question 3 covers the acceptance criterion's wording.</li>
+<li><strong>Data impact</strong>: none. No migration, no change to existing rows.</li>
+<li><strong>Rollback</strong>: revert the merge commit. No data or schema to undo. People created in the meantime stay valid under the old code.</li>
+<li><strong>Unverified, with a cheap check</strong>:
+  <ol>
+    <li>Swashbuckle 10 omits the <code>[JsonIgnore]</code> <code>Name</code> from the <code>CreatePersonResult</code> schema. Check: test P12 asserts the schema has no <code>name</code> property. If it appears, use <code>[property: JsonIgnore]</code> plus <code>[SwaggerIgnore]</code>, or build <code>Location</code> in the controller from <code>InputRules.Normalize(request.Name)</code>. That is a deterministic re-computation, not a second rule.</li>
+    <li>In <code>P7</code>, a <code>POST</code> with no body and no Content-Type returns ProblemDetails 415 (proven for <code>PUT</code> in contract 002 Amendment 1). Check: HTTP test P7c.</li>
+    <li>The 413 on Kestrel for POST. Check: K3 and QA item 6.</li>
+  </ol></li>
+</ul>
+
+<h2>10. Interplay with other tasks</h2>
+<ul>
+<li><strong>008</strong>: with the recommended <code>Location</code>, 008 needs no change for 006. If the user keeps <code>/Person/{name}</code>, 008 must also rewrite the header and tests P1-P3 and K1. I would add that to 008's acceptance criteria.</li>
+<li><strong>007</strong>: no interaction.</li>
+<li><strong>Future global exception handler or validation behaviour</strong>: would move the <code>ArgumentException</code> guard and the 500 shape for both PUT and POST together.</li>
+</ul>
+
+<h2>11. Subtasks</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Platform / agent</th><th>Scope</th><th>Depends on</th></tr>
+<tr><td>S1</td><td>api / api-dev</td><td>The <code>CreatePerson.cs</code> rewrite and pre-processor deletion, the controller action, the shared test doubles, the handler, HTTP and Kestrel tests, and the README changelog. Build with <code>-warnaserror</code>, and <code>has-pending-model-changes</code> must report none.</td><td>Contract 006 approved</td></tr>
+<tr><td>S2</td><td>ui / ui-dev</td><td><code>models.ts</code> types, <code>StargateApi.createPerson</code> and its Vitest tests. <code>npm test</code> and <code>npm run build</code> must pass.</td><td>Contract 006 approved; independent of S1</td></tr>
+<tr><td>S3</td><td>lead, then reviewers and qa-tester</td><td>Integrate S1 and S2 in one branch, run security and test review, then QA against the list in 8.</td><td>S1, S2</td></tr>
+</table></div>
+<p>S1 and S2 run in parallel in separate worktrees.</p>
+
+<h2>12. Contracts</h2>
+<ul>
+<li><a href="../contracts/006/contract.html">contract.html</a>: human summary, with breaking changes flagged.</li>
+<li><a href="../contracts/006/openapi.yaml">openapi.yaml</a>: <code>POST /Person</code>.</li>
+<li><a href="../contracts/006/data.md">data.md</a>: no schema change, C# shapes, rule enforcement, README text.</li>
+<li><a href="../contracts/006/types.ts">types.ts</a>: UI types and the <code>createPerson</code> semantics.</li>
+<li><a href="../contracts/006/tests.md">tests.md</a>: the test cases for each platform, and mutation targets.</li>
+</ul>
+
+<h2>13. Questions for the user</h2>
+<ol>
+<li><strong><code>Location</code> header target.</strong> The task decided <code>/Person/{name}</code>, but task 008 removes that route.
+  <ul>
+    <li><em>Recommendation:</em> <code>/Person?name=&lt;encoded stored name&gt;</code>. It works today (contains match, so it may list extra people) and after 008 (exact). The contract is written this way.</li>
+    <li>Alternative: keep <code>/Person/{name}</code> and add "rewrite the <code>Location</code>" to task 008.</li>
+  </ul></li>
+<li><strong>Compatibility characters and look-alikes</strong> (recorded in the 002 notes and the PR #5 description). Today these all pass the shared rule and count as names distinct from their ASCII forms: fullwidth <code>Ａｄａ</code>, ligatures such as <code>ﬁ</code>, and cross-script look-alikes such as Cyrillic <code>Аda</code>. The reasons: NFC rather than NFKC, and ASCII-only case folding. 006 does <em>not</em> change this.
+  <ul>
+    <li><em>Recommendation:</em> accept for 006. Then decide separately between:
+      <ul>
+        <li>(a) a hardening task that adds a persisted comparison key column: NFKC plus full Unicode case fold, with the unique index moved to it. This is robust and keeps the display name as typed.</li>
+        <li>(b) NFKC on the stored name itself. Simpler, but it rewrites what users typed (<code>ﬁ</code> becomes <code>fi</code>).</li>
+      </ul>
+      Cross-script look-alikes need UTS #39 confusable skeletons and are probably not worth it for an internal system of record. I suggest accepting that permanently.</li>
+  </ul></li>
+<li><strong>"Unexpected failures return a generic 500 message."</strong> As in 001 and 002, this plan removes the <code>try/catch</code>, so a Production 500 has an <em>empty</em> body (logged by the host), and Development shows the developer exception page. The criterion is met in the sense that nothing internal leaks, but no message is shown. A global ProblemDetails exception handler would add a generic message for every endpoint, but the task puts it out of scope.
+  <ul>
+    <li><em>Recommendation:</em> accept the empty-body 500 here, and add the global handler as its own small task.</li>
+  </ul></li>
+</ol>
+</main>
+</body>
+</html>

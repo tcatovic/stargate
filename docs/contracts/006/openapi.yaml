@@ -1,0 +1,187 @@
+# Contract for task 006: POST /Person becomes a validated create endpoint. Revision 1.
+# Only the endpoint this task changes. JSON is camelCase (MVC JsonSerializerDefaults.Web).
+# Every property listed under `required` is always present in the body; nullability is explicit.
+# JSON property order is not significant; clients must not depend on it.
+# Shared components (NamePattern, ValidationProblemDetails, ProblemDetails, BaseResponse) are identical to
+# docs/contracts/002/openapi.yaml (Amendment 1b) and repeated here so this file stands alone.
+# BREAKING versus main: request body shape, success status (200 -> 201), duplicate (500/200 -> 409),
+# invalid input (200 -> 400), 500 body (BaseResponse with exception text -> empty).
+openapi: 3.0.3
+info:
+  title: Stargate ACTS API - task 006 contract
+  version: "006"
+paths:
+  /Person:
+    post:
+      operationId: CreatePerson
+      tags: [Person]
+      summary: Create a person
+      description: >
+        Creates a person with no astronaut assignment (no AstronautDetail or AstronautDuty rows). The name is
+        NFC-normalised and trimmed, then validated against the shared name rule, compared and stored. Names are unique
+        ignoring ASCII case (SQLite NOCASE) after that normalisation; a taken name is 409, whether detected by the
+        pre-check or by the database unique index (concurrent creates). Order of checks: 415 (content type) and 413
+        (size) first, then 400 (body and name validation), then 409. Not idempotent: repeating a successful request
+        returns 409.
+      requestBody:
+        required: true
+        description: >
+          JSON object, at most 4096 bytes. Content-Type must be application/json (a charset parameter is allowed).
+          A bare JSON string (the pre-006 shape) is rejected: 400 with application/json, 415 with any other type.
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePersonRequest" }
+            example: { name: "Ada Lovelace" }
+      responses:
+        "201":
+          description: >
+            Created. `id` is the new person's id (an integer >= 1, the `personId` in GET /Person results).
+            Fixed values: success true, message "Successful", responseCode 201.
+          headers:
+            Location:
+              required: true
+              description: >
+                Relative URI "/Person?name=" followed by the STORED name (NFC, trimmed) encoded with .NET
+                Uri.EscapeDataString (RFC 3986: A-Z a-z 0-9 - . _ ~ kept, every other character percent-encoded as
+                UTF-8, space as %20, apostrophe as %27). Always ASCII. Example for "Zoë O'Brien":
+                /Person?name=Zo%C3%AB%20O%27Brien. Before task 008 that URL is a contains filter (may list more
+                people); after task 008 it is an exact, case-insensitive match. Clients are not required to read it.
+              schema: { type: string, example: "/Person?name=Ada%20Lovelace" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatePersonResult" }
+              example: { id: 7, success: true, message: Successful, responseCode: 201 }
+        "400":
+          $ref: "#/components/responses/ValidationFailed"
+        "409":
+          description: >
+            A person with this name already exists (ignoring ASCII case and surrounding whitespace, after NFC).
+            Returned both from the pre-check and when the database unique index rejects the insert. Nothing stored.
+            No Location header. The message never echoes the input.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatePersonResult" }
+              example: { id: null, success: false, message: A person with this name already exists, responseCode: 409 }
+        "413":
+          description: >
+            Request body larger than 4096 bytes ([RequestSizeLimit(4096)], enforced by Kestrel). Nothing stored, nothing
+            echoed. Body unspecified; clients key on the status only. Not listed in the generated Swagger document and
+            not enforced by the in-memory TestServer (which answers 400 via the 800-character raw bound instead).
+        "415":
+          description: >
+            Unsupported Content-Type; key on the status only. Content-Type present and not application/json (e.g.
+            text/plain, application/xml): EMPTY body, no Content-Type header. No Content-Type header at all (including
+            a request with no body): ProblemDetails (application/problem+json, status 415). Nothing stored.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/ProblemDetails" }
+        "500":
+          $ref: "#/components/responses/ServerError"
+
+components:
+  responses:
+    ValidationFailed:
+      description: >
+        Invalid input, produced by [ApiController] model validation before any handler runs. Causes (all with
+        Content-Type application/json): empty body; body not a JSON object (including a bare string such as "Ada", an
+        array, a number); malformed JSON; `name` not a string; `name` null or missing; `name` longer than 800 UTF-16
+        code units as sent; `name` empty or whitespace-only after trimming; `name` longer than 100 UTF-16 code units
+        after NFC and trimming; `name` not matching NamePattern after NFC and trimming. Nothing stored.
+        `errors` keys: `Name` for name-rule failures (compare case-insensitively), a `$`-prefixed JSON path or
+        `""`/`request` for body-shape failures. Clients must not branch on keys or parse messages. Messages never
+        contain the submitted value.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/ValidationProblemDetails" }
+          example:
+            type: https://tools.ietf.org/html/rfc9110#section-15.5.1
+            title: One or more validation errors occurred.
+            status: 400
+            errors:
+              Name: ["Use only letters, digits, spaces, hyphens, apostrophes and periods (at most 100 characters)."]
+            traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
+    ServerError:
+      description: >
+        Unexpected fault. Production: empty body (the host logs the exception). Development: developer exception page.
+        Never a BaseResponse carrying exception text. Clients must not parse it.
+
+  schemas:
+    NamePattern:
+      description: >
+        Unchanged from contract 002. .NET regular expression (not ECMAScript), applied to the NFC-normalised, trimmed
+        value: a letter followed by at most 3 combining marks, or an ASCII digit, space, period, apostrophe (U+0027) or
+        hyphen; never one of the 28 invisible code points U+034F U+115F U+1160 U+17B4 U+17B5 U+180B-U+180F U+3164
+        U+FE00-U+FE0F U+FFA0. Supplementary-plane letters are rejected. Length 1..100 is checked separately.
+        Known accepted limits: compatibility characters (fullwidth, ligatures) and cross-script look-alikes pass and
+        are distinct names; case folding is ASCII-only.
+      type: string
+      minLength: 1
+      maxLength: 100
+      pattern: "^(?:(?![\\u034F\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u3164\\uFE00-\\uFE0F\\uFFA0])\\p{L}(?:(?![\\u034F\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u3164\\uFE00-\\uFE0F\\uFFA0])\\p{M}){0,3}|[0-9 .'-])+\\z"
+
+    CreatePersonRequest:
+      type: object
+      required: [name]
+      additionalProperties: true   # unknown properties (e.g. id, personId) are ignored
+      properties:
+        name:
+          type: string
+          nullable: false
+          maxLength: 800
+          description: >
+            At most 800 UTF-16 code units as sent (checked before normalisation). NFC-normalised and trimmed (the
+            .NET char.IsWhiteSpace set, incl. NBSP and U+3000) before validation (NamePattern, 1..100), comparison
+            and storage.
+
+    BaseResponse:
+      type: object
+      required: [success, message, responseCode]
+      properties:
+        success: { type: boolean, nullable: false }
+        message: { type: string, nullable: false }
+        responseCode:
+          type: integer
+          format: int32
+          nullable: false
+          description: Always equal to the HTTP status code.
+
+    CreatePersonResult:
+      description: >
+        Exactly four properties on the wire: id, success, message, responseCode. The stored name is NOT in the body.
+      allOf:
+        - $ref: "#/components/schemas/BaseResponse"
+        - type: object
+          required: [id]
+          properties:
+            id:
+              type: integer
+              format: int32
+              nullable: true
+              minimum: 1
+              description: Non-null (>= 1) on 201; null on 409.
+      # Fixed values per status:
+      #   201: id >= 1, success true,  message "Successful",                             responseCode 201
+      #   409: id null, success false, message "A person with this name already exists", responseCode 409
+
+    ValidationProblemDetails:
+      type: object
+      required: [type, title, status, errors, traceId]
+      properties:
+        type: { type: string, nullable: false }
+        title: { type: string, nullable: false }
+        status: { type: integer, format: int32, nullable: false, enum: [400] }
+        errors:
+          type: object
+          nullable: false
+          additionalProperties: { type: array, items: { type: string } }
+        traceId: { type: string, nullable: false }
+
+    ProblemDetails:
+      description: Only sent with 415 when the request has no Content-Type header. Clients must not read it.
+      type: object
+      required: [type, title, status, traceId]
+      properties:
+        type: { type: string, nullable: false }
+        title: { type: string, nullable: false }
+        status: { type: integer, format: int32, nullable: false, enum: [415] }
+        traceId: { type: string, nullable: false }

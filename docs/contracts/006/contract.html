@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract 006: POST /Person create endpoint</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.45rem; margin:.4rem 0; } h2 { font-size:1.12rem; margin:1.6rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Contract 006 &middot; revision 1 &middot; baseline <code>main</code> <code>f42dc41</code> &middot; plan: <a href="../../plans/006-create-person-endpoint.html">006-create-person-endpoint.html</a> &middot; status: awaiting approval</p>
+<h1>Contract 006: POST /Person becomes a validated create endpoint</h1>
+<p>One endpoint changes. There is no schema change. The UI gains one client method. The api and ui developers build against this page and the files listed at the bottom, in parallel.</p>
+
+<div class="card bad"><p><strong>Breaking changes</strong> (accepted in the task Decisions, except the <code>Location</code> target, which is Question 1 below):</p>
+<ul>
+<li><strong>Request body</strong>: <code>{ "name": "..." }</code> replaces the bare JSON string <code>"..."</code>. A bare string now gets 400 (with <code>application/json</code>) or 415 (any other content type).</li>
+<li><strong>Success</strong>: <strong>201 Created</strong> (was 200), <code>responseCode: 201</code>, plus a new <code>Location</code> header.</li>
+<li><strong>Duplicate</strong>: <strong>409</strong>. It used to be a 500 carrying EF's message, or a 200 with a second row for padded or NFD names.</li>
+<li><strong>Invalid name</strong>: <strong>400</strong> (was 200 and stored). There are also new 415 and 413 responses.</li>
+<li><strong>500 body</strong>: empty in Production. It used to carry the exception message.</li>
+<li><code>id</code> is now nullable: always a number on 201, <code>null</code> on 409.</li>
+</ul></div>
+
+<h2>Request</h2>
+<pre><code>POST /Person
+Content-Type: application/json        (charset allowed; body at most 4096 bytes)
+
+{ "name": "Ada Lovelace" }            (unknown properties ignored)</code></pre>
+<p>Validation uses the shared rule from 002, unchanged. The name is checked against an 800-character bound as sent, then NFC-normalised and trimmed, and then must be 1 to 100 characters of letters (each followed by at most 3 combining marks), digits, space, <code>.</code>, <code>'</code> and <code>-</code>, with none of the 28 invisible code points.</p>
+
+<h2>Responses</h2>
+<div class="table-wrap"><table>
+<tr><th>Status</th><th>When</th><th>Body</th></tr>
+<tr><td>201</td><td>Created</td><td><code>{ "id": 7, "success": true, "message": "Successful", "responseCode": 201 }</code>, exactly these four keys, plus the header <code>Location: /Person?name=Ada%20Lovelace</code></td></tr>
+<tr><td>400</td><td>The body is empty, not an object (including a bare string), or malformed; <code>name</code> is missing, null or not a string; or it fails the name rule</td><td><code>ValidationProblemDetails</code>, never echoing the input</td></tr>
+<tr><td>409</td><td>The name is taken, ignoring ASCII case and surrounding whitespace, after NFC. This covers both the pre-check and a concurrent create rejected by the unique index</td><td><code>{ "id": null, "success": false, "message": "A person with this name already exists", "responseCode": 409 }</code>, no <code>Location</code></td></tr>
+<tr><td>413</td><td>Body over 4096 bytes (on Kestrel)</td><td>Unspecified; key on the status</td></tr>
+<tr><td>415</td><td>The Content-Type is not JSON (empty body), or there is no Content-Type at all (ProblemDetails)</td><td>Key on the status</td></tr>
+<tr><td>500</td><td>An unexpected fault</td><td>Empty in Production; the developer page in Development only</td></tr>
+</table></div>
+<p>Checks run in this order: 415 and 413 first, then 400, then 409. A successful create of a name that is then posted again returns 409; the endpoint is not idempotent.</p>
+
+<h2>Location header <span class="tag warn">differs from the task decision</span></h2>
+<ul>
+<li><strong>Value</strong>: <code>/Person?name=</code> followed by the <em>stored</em> name, encoded with <code>Uri.EscapeDataString</code> (relative and ASCII-only). Example: <code>Zoë O'Brien</code> gives <code>/Person?name=Zo%C3%AB%20O%27Brien</code>.</li>
+<li><strong>Why not <code>/Person/{name}</code></strong>: task 008 removes that route, after which the header would point at a 404. <code>GET /Person?name=</code> works today (contains match) and after 008 (exact match).</li>
+<li><strong>Why the encoding is required</strong>: a probe showed that Kestrel answers 500 for a non-ASCII header, after the row is already stored.</li>
+<li>The UI does not read <code>Location</code>.</li>
+</ul>
+
+<h2>UI client</h2>
+<pre><code>createPerson(name: string): Observable&lt;CreatePersonOutcome&gt;
+  // POST /api/Person { name }  (name unmodified)
+  // 201 with id &gt;= 1        -&gt; { status: 'created', id }
+  // 201 with a bad id       -&gt; error 'Malformed create response'
+  // 409                     -&gt; { status: 'conflict' }
+  // 400                     -&gt; { status: 'invalid', errors }
+  // anything else           -&gt; HttpErrorResponse propagates</code></pre>
+<p>New types in <code>models.ts</code>: <code>CreatePersonRequest { name: string }</code>, <code>CreatePersonResult extends BaseResponse { id: number | null }</code>, <code>CreatePersonOutcome</code>.</p>
+
+<h2>Domain rules</h2>
+<ul>
+<li><strong>Rule 1</strong>: names are normalised (NFC and trim), then the handler runs a NOCASE pre-check. The existing unique index <code>IX_Person_Name</code> is the guarantee, and a lost race maps to 409. Parallel creates of the same name give exactly one 201.</li>
+<li><strong>Rule 2</strong>: only a <code>Person</code> row is inserted. <code>AstronautDetail</code> and <code>AstronautDuty</code> are untouched, and tests compare dumps of both. The new person lists with <code>""</code> rank and title and <code>null</code> dates.</li>
+</ul>
+
+<h2>Removed</h2>
+<ul>
+<li><code>CreatePersonPreProcessor</code> (never registered, so dead code). The duplicate check now lives only in the handler, as for PUT.</li>
+<li>The POST action's <code>try/catch</code>, which returned <code>ex.Message</code>.</li>
+</ul>
+
+<h2>Open questions (answer when approving)</h2>
+<ol>
+<li><strong><code>Location</code> target.</strong> <em>Recommended</em>: <code>/Person?name=</code>, as this contract is written. The alternative is to keep <code>/Person/{name}</code> and make task 008 rewrite it.</li>
+<li><strong>Compatibility characters and look-alikes</strong> (<code>Ａｄａ</code>, <code>ﬁ</code>, Cyrillic <code>а</code>) remain distinct, valid names; this rule is not changed here. <em>Recommended</em>: accept for 006, and decide on a separate hardening task (a comparison key column with NFKC and full case folding) versus accepting the limit.</li>
+<li><strong>500 body.</strong> It is empty rather than a "generic message". <em>Recommended</em>: accept, and add a global ProblemDetails exception handler as its own task.</li>
+</ol>
+
+<h2>Files</h2>
+<ul>
+<li><a href="openapi.yaml">openapi.yaml</a>: endpoint, schemas, status codes</li>
+<li><a href="data.md">data.md</a>: no schema change; C# shapes, handler steps, controller, rule enforcement, README text</li>
+<li><a href="types.ts">types.ts</a>: exact UI types and <code>createPerson</code> semantics</li>
+<li><a href="tests.md">tests.md</a>: H (handler), P (HTTP), K (Kestrel), U (UI), and mutation targets</li>
+</ul>
+</main>
+</body>
+</html>

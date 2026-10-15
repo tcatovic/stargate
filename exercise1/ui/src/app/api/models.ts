@@ -30,10 +30,6 @@ export interface GetPeopleResult extends BaseResponse {
   people: PersonAstronaut[];
 }
 
-export interface GetPersonByNameResult extends BaseResponse {
-  person: PersonAstronaut | null;
-}
-
 /**
  * Body of GET /AstronautDuty?name= for 200 and 404. On 200 `person` is non-null and `astronautDuties` is ordered
  * newest start first (possibly empty). On 404 `person` is null and `astronautDuties` is [].
@@ -43,7 +39,11 @@ export interface GetAstronautDutiesByNameResult extends BaseResponse {
   astronautDuties: AstronautDuty[];
 }
 
-/** Optional filters for GET /Person. Values are trimmed; empty values are not sent. */
+/**
+ * Optional filters for GET /Person. Mirrors the API's GetPeople query object field for field (query keys name, rank,
+ * dutyTitle). Each is a case-insensitive exact match; name is the person's full name. Values are trimmed; empty
+ * values are not sent.
+ */
 export interface PersonFilters {
   name?: string;
   rank?: string;
@@ -51,7 +51,7 @@ export interface PersonFilters {
 }
 
 /**
- * Body of every HTTP 400 from GET /Person, GET /Person/{name}, PUT /Person/{personId}, POST /Person,
+ * Body of every HTTP 400 from GET /Person, PUT /Person/{personId}, POST /Person,
  * GET /AstronautDuty and POST /AstronautDuty.
  */
 export interface ValidationProblemDetails {

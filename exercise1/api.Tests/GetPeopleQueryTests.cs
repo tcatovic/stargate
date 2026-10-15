@@ -175,16 +175,6 @@ public class GetPeopleQueryTests
     }
 
     [Fact]
-    public async Task P11_CaseFoldingIsAsciiOnly()
-    {
-        using var db = PeopleFixture.Create(new Person { Name = "Élena Test" });
-
-        Assert.Equal(["Élena Test"], Names(await Run(db, new GetPeople { Name = "Élena" })));
-        Assert.Equal(["Élena Test"], Names(await Run(db, new GetPeople { Name = "ÉLENA" })));
-        Assert.Empty((await Run(db, new GetPeople { Name = "élena" })).People);
-    }
-
-    [Fact]
     public async Task CancelledToken_IsHonoured()
     {
         using var db = PeopleFixture.Create();

@@ -412,20 +412,24 @@ public sealed class PersonUpdateHttpTests : IDisposable
     }
 
     [Fact]
-    public async Task P13_TheReadSideFindsNfcNamesWithNfdInput_AndRejectsInvisibleLetters()
+    public async Task P13_NonAsciiIsRejectedOnPutAndOnTheReadSide()
     {
         var mira = IdOf("Mira Okafor");
-        Assert.Equal(HttpStatusCode.OK, (await Put(mira, "Ren\u00E9e \u00D6degaard")).Status);
+        var before = _db.Dump();
 
-        var (status, _, list) = await Get("/Person?name=Rene%CC%81e");
+        var (put, putText, _) = await Put(mira, "Ren\u00E9e \u00D6degaard");
+        var (filter, filterText, _) = await Get("/Person?name=Rene%CC%81e");
         var (invisible, _, _) = await Get("/Person?name=Ada%E3%85%A4");
-        var (byName, _, single) = await Get("/Person/Rene%CC%81e%20%C3%96degaard");
+        var (byName, byNameText, _) = await Get("/Person/Jos%C3%A9");
 
-        Assert.Equal(HttpStatusCode.OK, status);
-        Assert.Contains("Ren\u00E9e \u00D6degaard", Names(list));
+        Assert.Equal(HttpStatusCode.BadRequest, put);
+        Assert.Equal(HttpStatusCode.BadRequest, filter);
         Assert.Equal(HttpStatusCode.BadRequest, invisible);
-        Assert.Equal(HttpStatusCode.OK, byName);
-        Assert.Equal(mira, single.GetProperty("person").GetProperty("personId").GetInt32());
+        Assert.Equal(HttpStatusCode.BadRequest, byName);
+        Assert.DoesNotContain("gaard", putText);
+        Assert.DoesNotContain("Rene", filterText);
+        Assert.DoesNotContain("Jos", byNameText);
+        Assert.Equal(before, _db.Dump());
     }
 
     [Fact]

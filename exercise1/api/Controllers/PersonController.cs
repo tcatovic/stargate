@@ -74,8 +74,8 @@ namespace StargateAPI.Controllers
         [Consumes("application/json")]
         [RequestSizeLimit(4096)]
         [EndpointSummary("Rename a person")]
-        [EndpointDescription("Renames the person with this id. The name is NFC-normalised and trimmed, then validated against the shared "
-            + "name rule, compared and stored. Names are unique ignoring ASCII case (SQLite NOCASE) after that normalisation; "
+        [EndpointDescription("Renames the person with this id. Surrounding ASCII whitespace is removed, then the name is validated against the shared "
+            + "name rule, compared and stored. Names are unique ignoring ASCII case (SQLite NOCASE) after trimming; "
             + "renaming to the person's own name or a different casing of it succeeds. Idempotent: repeating the same "
             + "request yields the same state and the same 200 body. Only Person.Name changes; AstronautDetail and "
             + "AstronautDuty rows are never read or written. No Location header.")]

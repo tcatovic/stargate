@@ -1,7 +1,7 @@
 ---
 id: 006
 title: Make POST /Person a proper, validated create endpoint
-status: planned   # draft | ready | planned | approved | in-progress | done | blocked
+status: approved   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]   # api | ui | infra | db
 ---
 
@@ -22,13 +22,18 @@ A caller can add a person with a documented JSON object body, gets a 201 Created
 
 ## Decisions (agreed with the user)
 - **This task owns all `POST /Person` behaviour**, including the duplicate 409. Task 002 keeps only the unique index and the rename.
-- **Name rule** (defined in 002, shared by create and rename): 1 to 100 characters after trimming; letters, digits, spaces, hyphen, apostrophe and period only.
-- **`Location` header** points at `/Person/{name}` (URL-encoded), since that route exists. A `GET /Person/{id}` route is a separate task.
+- **Name rule: ASCII only (revised after plan review).** Names are trimmed, 1 to 100 characters, and may contain only ASCII letters, digits, space, hyphen, apostrophe and period. All Unicode handling (NFC normalisation, invisible-character rejection, combining marks, the 800-character raw bound) is removed from the merged 001/002 code in a separate commit set of this task; accented and other non-ASCII names now get 400 (deliberate). Only ASCII whitespace is trimmed; a non-ASCII whitespace character at an edge is rejected, not trimmed. The look-alike / NFKC question is moot.
+- **`Location` header** points at `/Person?name=<Uri.EscapeDataString(stored name)>`. Task 008 removes `GET /Person/{name}`, so the header must not point at it. A `GET /Person/{id}` route remains a separate task.
+- **`name` filter is exact now (revised after plan review):** `GET /Person?name=` becomes a case-insensitive, trimmed EXACT match in this task (no contains), and the `LIKE ... ESCAPE` and wildcard-escaping code from task 001 is deleted. This brings forward the exact-name part of task 008; 008 keeps only the removal of `GET /Person/{name}` and the single query object. `?name=ra` returns an empty list; the full name (for example `Elena Vasquez`, case-insensitive) finds her.
+- **Existing non-ASCII rows:** no data migration and no database constraint. Names already stored with non-ASCII characters stay, can be renamed by id, but cannot be looked up by name.
+- **500 body:** empty in Production and the developer page in Development, as in tasks 001/002. A global exception handler is a separate follow-up task.
+- **Pre-processor:** `CreatePersonPreProcessor` is deleted, not registered; duplicate handling lives in the handler plus the unique-violation mapping.
+- **Work order inside this task:** (C1) ASCII-only rule, (C2) exact filter, (C3) POST feature, (C4) UI `createPerson`; C1 and C2 are separate commits for review.
 - **Break the request body cleanly**: object body `{ "name": "..." }` only; the bare-string body is no longer accepted. Nothing in the repo calls it (the UI has no `createPerson`). The user is aware this breaks any external caller.
 - **201 response body returns just the `id`** (existing field name), alongside `success`, `message` and `responseCode`. No rename to `personId`.
 
 ## Acceptance criteria
-- [ ] `POST /Person` accepts `{ "name": "..." }` and, on success, returns 201 Created with a body containing the new person's `id` and `responseCode` 201, plus a `Location` header pointing at `/Person/{name}` (URL-encoded).
+- [ ] `POST /Person` accepts `{ "name": "..." }` and, on success, returns 201 Created with a body containing the new person's `id` and `responseCode` 201, plus a `Location` header pointing at `/Person?name=<encoded name>`.
 - [ ] The name is trimmed before it is validated, compared or stored; the stored name has no leading or trailing whitespace.
 - [ ] Invalid input returns 400 and stores nothing: missing body, `null`/missing `name`, empty or whitespace-only name, name longer than the maximum, and names containing disallowed characters (the shared name rule above). `responseCode` equals the HTTP status.
 - [ ] A name equal to an existing person's name, ignoring case and surrounding whitespace, returns 409 and stores nothing (rule 1). Example: `ada` / `  ADA ` after `Ada` exists.

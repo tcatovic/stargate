@@ -9,7 +9,7 @@ Domain spec: `exercise1/README.md` (requirements and rules).
 ```
 exercise1/api/                 ASP.NET Core 8 Web API (StargateAPI.csproj)
   Controllers/                 Thin controllers -> IMediator. BaseResponse + GetResponse() map ResponseCode to HTTP status
-  Business/Commands/           MediatR commands, handlers, pre-processors (CreatePerson, CreateAstronautDuty)
+  Business/Commands/           MediatR commands, handlers, pre-processors (CreateAstronautDuty only; CreatePerson validates in its handler)
   Business/Queries/            MediatR queries + handlers (GetPeople, GetPersonByName, GetAstronautDutiesByName)
   Business/Data/               EF Core entities (Person, AstronautDetail, AstronautDuty) + StargateContext
   Business/Dtos/               PersonAstronaut
@@ -53,6 +53,8 @@ The UI calls the API at `/api/...`; `ng serve` proxies that to the API's `http` 
 5. When a new duty arrives, the previous duty's DutyEndDate = new DutyStartDate minus 1 day.
 6. A Person is "Retired" when the duty title is `RETIRED`.
 7. CareerEndDate = the Retired duty's DutyStartDate minus 1 day.
+
+Names are ASCII only: trimmed, 1 to 100 characters of A-Z, a-z, 0-9, space, hyphen, apostrophe and period (one shared rule, `InputRules`). Matching on names is case-insensitive and exact. Non-ASCII names are rejected on purpose.
 
 Rules must hold in the database as well as in code (unique indexes, constraints, transactions), because the external feed and API callers can race.
 

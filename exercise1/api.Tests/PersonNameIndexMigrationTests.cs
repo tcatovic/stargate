@@ -167,4 +167,88 @@ public class PersonNameIndexMigrationTests
         Assert.Equal(new[] { TestDatabase.InitialCreate, TestDatabase.MakeCareerStartDateRequired }, db.AppliedMigrations());
         Assert.Equal(2, db.Scalar<long>("SELECT COUNT(*) FROM \"Person\""));
     }
+
+    private static int[] AllWhiteSpaceCodePoints() =>
+        Enumerable.Range(0, 0x10000).Where(c => char.IsWhiteSpace((char)c)).ToArray();
+
+    [Fact]
+    public void M9_TheMigrationTrimList_IsExactlyTheWhitespaceSetThatStringTrimRemoves()
+    {
+        var listed = StargateAPI.Migrations.AddUniquePersonNameIndex.TrimCharacterCodes
+            .Split(',', StringSplitOptions.TrimEntries).Select(int.Parse).Order().ToArray();
+
+        Assert.Equal(AllWhiteSpaceCodePoints(), listed);
+        // string.Trim() really removes each of them (independent of char.IsWhiteSpace being the documented basis).
+        Assert.All(listed, c => Assert.Equal("x", ((char)c + "x" + (char)c).Trim()));
+        Assert.Equal(25, listed.Length);
+    }
+
+    [Fact]
+    public void M10_EveryUnicodeWhitespaceCharacter_IsTrimmedAtBothEnds_ByTheMigration()
+    {
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.MakeCareerStartDateRequired);
+        var codes = AllWhiteSpaceCodePoints();
+        foreach (var code in codes)
+        {
+            db.Execute($"INSERT INTO \"Person\" (\"Name\") VALUES ('L{code}' || char({code})), ('R{code}' || char({code}) || char({code})), (char({code}) || 'B{code}');");
+        }
+
+        db.Migrate();
+
+        Assert.Equal(codes.Length * 3, db.Scalar<long>("SELECT COUNT(*) FROM \"Person\""));
+        foreach (var code in codes)
+        {
+            Assert.Equal(1, db.Scalar<long>($"SELECT COUNT(*) FROM \"Person\" WHERE \"Name\" = 'L{code}'"));
+            Assert.Equal(1, db.Scalar<long>($"SELECT COUNT(*) FROM \"Person\" WHERE \"Name\" = 'R{code}'"));
+            Assert.Equal(1, db.Scalar<long>($"SELECT COUNT(*) FROM \"Person\" WHERE \"Name\" = 'B{code}'"));
+        }
+    }
+
+    [Fact]
+    public void M11_AnIdeographicSpacePaddedName_AloneIsTrimmed()
+    {
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.MakeCareerStartDateRequired);
+        db.Execute("INSERT INTO \"Person\" (\"Id\", \"Name\") VALUES (1, char(12288) || 'Ada'), (2, 'Grace' || char(160));");
+
+        db.Migrate();
+
+        Assert.Equal("1|Ada\n2|Grace", string.Join("\n", ReadPeople(db)));
+    }
+
+    [Theory]
+    [InlineData(160)]
+    [InlineData(12288)]
+    [InlineData(8195)]
+    [InlineData(133)]
+    [InlineData(11)]
+    public void M12_AdaAndAdaPaddedWithUnicodeWhitespace_Abort_AndChangeNothing(int code)
+    {
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.MakeCareerStartDateRequired);
+        db.Execute($"INSERT INTO \"Person\" (\"Id\", \"Name\") VALUES (1, 'Ada'), (2, 'Ada' || char({code})), (3, 'Grace');");
+        var before = db.Dump();
+
+        var error = Assert.ThrowsAny<Exception>(() => db.Migrate());
+
+        AssertAbortedAndUntouched(db, error, before);
+    }
+
+    [Theory]
+    [InlineData("''")]
+    [InlineData("char(32)")]
+    [InlineData("char(12288) || char(9)")]
+    public void M13_ANameThatIsEmptyOnceTrimmed_Aborts_AndChangesNothing(string sqlName)
+    {
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.MakeCareerStartDateRequired);
+        db.Execute($"INSERT INTO \"Person\" (\"Id\", \"Name\") VALUES (1, 'Ada'), (2, {sqlName});");
+        var before = db.Dump();
+
+        var error = Assert.ThrowsAny<Exception>(() => db.Migrate());
+
+        AssertAbortedAndUntouched(db, error, before);
+        Assert.Contains("empty once trimmed", Sqlite(error).Message);
+    }
 }

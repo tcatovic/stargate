@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract 008: One GetPeople query object, GET /Person/{name} removed (revision 1)</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.45rem; margin:.4rem 0; } h2 { font-size:1.12rem; margin:1.6rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background: var(--code); padding:.08em .3em; border-radius:4px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .ok { border-left:5px solid var(--ok); } .warn { border-left:5px solid var(--warn); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.bad { color:var(--bad); } .tag.ok { color:var(--ok); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 008 &middot; contract revision 1 &middot; baseline <code>main</code> e950203 &middot; status: awaiting approval together with the <a href="../../plans/008-consolidate-get-people-query-exact-name.html">plan</a></p>
+<h1>Contract 008: One GetPeople query object, <code>GET /Person/{name}</code> removed</h1>
+<p>Files: <a href="openapi.yaml">openapi.yaml</a> &middot; <a href="data.md">data.md</a> &middot; <a href="types.ts">types.ts</a> &middot; <a href="tests.md">tests.md</a></p>
+
+<h2>Breaking changes</h2>
+<div class="card bad">
+<p><span class="tag bad">BREAKING</span> <strong><code>GET /Person/{name}</code> is removed.</strong> Any GET or HEAD on <code>/Person/{x}</code> now gets <strong>405 Method Not Allowed</strong>, header <code>Allow: PUT</code>, empty body. That path belongs to <code>PUT /Person/{personId}</code>, so routing answers "method not allowed", not 404. No handler runs and no person data is returned. Use <code>GET /Person?name=&lt;name&gt;</code>. An unknown person is <strong>200</strong> with <code>people: []</code> (it was 404).</p>
+<p><em>Pending your answer to plan Q1.</em> The task asked for a 404. The 405 is what the framework does without changing PUT. If you choose the PUT route-constraint alternative instead, only the Q1 rows, this card and the openapi note change.</p>
+</div>
+<div class="card bad">
+<p><span class="tag bad">BREAKING (UI internal)</span> <code>StargateApi.getPerson</code> and <code>GetPersonByNameResult</code> are removed. No component used them.</p>
+</div>
+
+<h2>Not breaking</h2>
+<div class="card ok">
+<ul>
+<li><strong><code>GET /Person</code> parameters and response shapes are unchanged.</strong> The parameters are <code>name</code>, <code>rank</code> and <code>dutyTitle</code>, all optional, case-insensitive exact, combined with AND. The 200 response is <code>{ people[], success, message, responseCode }</code>, with <code>""</code> rank and title for unassigned people. The 400 response is <code>ValidationProblemDetails</code> keyed <code>name</code>/<code>rank</code>/<code>dutyTitle</code>, and the input is never echoed.</li>
+<li><strong>Trimming matches the writes.</strong> Surrounding ASCII whitespace (tab, LF, VT, FF, CR, space) is removed before validation. A leading or trailing control character, or padding beyond 100 characters, now returns 200 instead of 400. No input that was accepted before is now rejected.</li>
+<li><strong>Over-long values</strong> return 400 with exactly one message, the shared name-rule message (it was "The field <em>x</em> must be a string with a maximum length of 100.").</li>
+<li><strong>Binding</strong> (unchanged, now written down): parameter names are case-insensitive, a repeated parameter uses its first value, and unknown parameters are ignored. <code>query</code> and <code>query.name</code> are not aliases and never switch a filter off.</li>
+<li><strong>Swagger</strong>: <code>/Person</code> keeps <code>maxLength</code> and <code>pattern</code> and loses only <code>minLength: 0</code>. <code>GET /AstronautDuty</code>'s <code>name</code> gains <code>maxLength</code> and <code>pattern</code>. <code>/Person/{name}</code> and <code>GetPersonByNameResult</code> are gone.</li>
+</ul>
+</div>
+
+<h2>What each side builds</h2>
+<div class="table-wrap"><table>
+<tr><th>Side</th><th>Builds against</th></tr>
+<tr><td>api-dev</td><td><code>GetPeople</code> becomes the query object. Each property carries <code>[FromQuery(Name = "name"|"rank"|"dutyTitle")]</code>, <code>[ValidName]</code> and <code>[Description]</code>. The action is <code>GetPeople([FromQuery(Name = "")] GetPeople query, CancellationToken)</code> and sends the same instance. Also: delete <code>GetPersonByName</code> and its action, add <code>ValidNameParameterFilter</code>, reword two comments, write the README changelog entry, and the tests in sections 1-4 of tests.md. No migration.</td></tr>
+<tr><td>ui-dev</td><td><code>PersonFilters</code> is unchanged in shape with a new doc comment. Remove <code>getPerson</code> and <code>GetPersonByNameResult</code>, update the <code>ValidationProblemDetails</code> comment, and write the tests in tests.md section 5.</td></tr>
+</table></div>
+<p>There are no shared files. The only agreement between the two sides is the query keys <code>name</code>, <code>rank</code>, <code>dutyTitle</code> and the removed route.</p>
+
+<h2>Domain rules</h2>
+<ul>
+<li><strong>Rule 1:</strong> one exact, trimmed, case-insensitive lookup by name (<code>GET /Person?name=</code>), backed by the unique NOCASE index.</li>
+<li><strong>Rule 2:</strong> SQL is unchanged. Unassigned people are matched by <code>name</code> alone and never by <code>rank</code> or <code>dutyTitle</code>.</li>
+</ul>
+
+<h2>Security note</h2>
+<p>When the object is bound with a plain <code>[FromQuery] GetPeople query</code>, <code>?query=x&amp;name=%25</code> returns 200 with every person: validation and filters are skipped (observed in planning). The contract requires <code>Name = ""</code> on the action parameter, and tests Q5a-Q5f lock that in.</p>
+</main>
+</body>
+</html>

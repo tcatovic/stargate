@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 008: One GetPeople query object, remove GET /Person/{name}</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.5rem; margin:.4rem 0; } h2 { font-size:1.15rem; margin:1.8rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  h3 { font-size:1rem; margin:1.2rem 0 .3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 008 &middot; plan revision 1 &middot; baseline <code>main</code> at <code>e950203</code> (tasks 001-007 merged) &middot; branch <code>task/008-consolidate-get-people-query-exact-name</code> &middot; status: awaiting approval (plan and contracts together)</p>
+<h1>Plan 008: One GetPeople query object, remove <code>GET /Person/{name}</code></h1>
+<p class="meta">Contracts: <a href="../contracts/008/contract.html">docs/contracts/008/contract.html</a> (with <code>openapi.yaml</code>, <code>data.md</code>, <code>types.ts</code>, <code>tests.md</code>).</p>
+
+<h2>Summary and verdict</h2>
+<p><strong>Verdict: <span class="tag warn">multi</span></strong> (api + ui). The work spans two platforms, and the two halves need nothing from each other except a fixed agreement: <code>PersonFilters</code> is <code>{ name?, rank?, dutyTitle? }</code> and <code>GET /Person/{name}</code> no longer exists. The UI part is small (remove <code>getPerson</code>, <code>GetPersonByNameResult</code> and their tests, and update two doc comments). It still gets its own developer, as in 006 and 007, so both halves can run in parallel against the contract.</p>
+<p>What this task does (the task's revised Decisions say task 006 already made the <code>name</code> match exact and removed the LIKE code, and task 007 stopped using <code>GetPersonByName</code>):</p>
+<ol>
+<li>Delete <code>GET /Person/{name}</code> and <code>GetPersonByName</code> (request, handler and result), plus their tests and the UI's <code>getPerson</code> and <code>GetPersonByNameResult</code>.</li>
+<li>Make <code>GetPeople</code> the single query object. MVC binds it with <code>[FromQuery]</code>, the validation and Swagger attributes sit on its properties, and the same instance is sent to MediatR.</li>
+<li>Validate GET filters the same way as writes: trim first, then apply the shared name rule (<code>[ValidName]</code>).</li>
+<li>Add a changelog entry to the README.</li>
+</ol>
+
+<div class="card bad">
+<p><strong>One assumption in the task is wrong, and it needs your decision (Q1).</strong> After the removal, <code>GET /Person/{anything}</code> does <em>not</em> return 404. It returns <strong>405 Method Not Allowed</strong> with header <code>Allow: PUT</code> and an empty body. The reason is that the path still matches the template of <code>PUT /Person/{personId}</code> (<code>PersonController.cs:72</code>), so endpoint routing reports "path known, method not allowed". I observed this on Kestrel (probe below) for <code>/Person/Ada</code>, <code>/Person/123</code>, <code>/Person/Elena%20Vasquez</code> and <code>/Person/%20</code>, and for <code>HEAD</code> and <code>DELETE</code>. Task 007's removed route returned 404 only because <code>/AstronautDuty/{x}</code> matches no other template.</p>
+<p>The plan and contract fix the status at <strong>405</strong>. That still meets everything else the task requires of the removed route: no handler runs, no person data, no redirect, no 410, and no deprecation period. A routing 404 is possible only by changing <code>PUT</code> (see Q1), so I recommend 405.</p>
+</div>
+
+<div class="card warn">
+<p><strong>A second finding the task did not anticipate (fixed in the plan).</strong> If the query object is bound with a plain <code>[FromQuery] GetPeople query</code>, MVC's prefix fallback creates a filter bypass. When any query key equals the C# parameter name, MVC switches to the <code>query.</code> prefix. So <code>/Person?query=x&amp;name=Elena%20Vasquez</code> returned <strong>all six people</strong>, and <code>/Person?query=x&amp;name=%25</code> returned <strong>200 with everyone instead of 400</strong>, because validation was skipped. It also made <code>?query.name=</code> a working alias. Pinning the prefix with <code>[FromQuery(Name = "")]</code> on the action parameter removes all three effects. I verified this in the probe, and tests Q5a-Q5e lock it in.</p>
+</div>
+
+<h2>Current behaviour (main e950203)</h2>
+<div class="table-wrap"><table>
+<tr><th>Where</th><th>What</th></tr>
+<tr><td><code>api/Controllers/PersonController.cs:22-49</code></td><td><code>GET /Person</code> takes three loose <code>[FromQuery]</code> parameters (<code>:32-39</code>). Each carries <code>[StringLength(100)]</code>, <code>[RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = AllowedCharactersMessage)]</code> and a <code>[Description]</code>. The action copies them into a new <code>GetPeople</code> (<code>:41-46</code>). Those attributes validate the <strong>raw</strong> (untrimmed) value.</td></tr>
+<tr><td><code>api/Controllers/PersonController.cs:51-70</code></td><td><code>GET /Person/{name}</code> sends <code>GetPersonByName</code>. Returns 200, 400 or 404 (<code>GetPersonByNameResult</code>).</td></tr>
+<tr><td><code>api/Controllers/PersonController.cs:72</code></td><td><code>[HttpPut("{personId}")]</code>: the template <code>/Person/{personId}</code> has no route constraint. This is what turns a GET on the removed path into a 405.</td></tr>
+<tr><td><code>api/Business/Queries/GetPeople.cs:10-20</code></td><td><code>GetPeople</code> has <code>Name</code>, <code>Rank</code> and <code>DutyTitle</code> (<code>string?</code>, <code>init</code>) with no attributes. The handler (<code>:27-34</code> SQL, <code>:60</code> <code>Normalize</code>) maps null/whitespace to "no filter", trims with <code>InputRules.Normalize</code>, and runs an exact <code>= @x COLLATE NOCASE</code> match. There is no LIKE (task 006 removed it; regression check only).</td></tr>
+<tr><td><code>api/Business/Queries/GetPersonByName.cs:1-61</code></td><td>Request, handler (exact NOCASE, exact-case first, then lowest Id, <code>LIMIT 1</code>, 404 "Person not found") and <code>GetPersonByNameResult { Person }</code>. MediatR registration is assembly scanning (<code>Program.cs:32-35</code>), so there is no DI line to remove.</td></tr>
+<tr><td><code>api/Business/Validation/ValidNameAttribute.cs:16-17</code></td><td>Write rule: <code>null</code> is valid, otherwise <code>IsValidName(Normalize(text))</code>, with message <code>AllowedCharactersMessage</code>. Used by <code>POST/PUT /Person</code> and both <code>/AstronautDuty</code> actions.</td></tr>
+<tr><td><code>api/Business/Validation/InputRules.cs:41,47</code></td><td><code>Normalize</code> trims ASCII whitespace (tab, LF, VT, FF, CR, space). <code>IsValidName</code> checks length 1-100, then the pattern.</td></tr>
+<tr><td><code>api/Program.cs:25</code></td><td><code>AddSwaggerGen()</code> with no filters. Swashbuckle derives <code>maxLength</code>/<code>minLength:0</code>/<code>pattern</code> from <code>StringLength</code> and <code>RegularExpression</code>. It knows nothing about <code>[ValidName]</code>.</td></tr>
+<tr><td>Comments only</td><td><code>Business/Commands/CreateAstronautDuty.cs:77</code> and <code>Business/Queries/GetAstronautDutiesByName.cs:18</code> mention <code>GetPersonByName</code>. <code>AstronautDutyController</code> has no reference (verified by grep, satisfied by 007).</td></tr>
+<tr><td><code>ui/src/app/api/stargate-api.ts:12,44-59</code></td><td><code>getPerson(name)</code> calls <code>GET /api/Person/{name}</code> and maps a 404 to <code>null</code>. No component uses it (grep).</td></tr>
+<tr><td><code>ui/src/app/api/models.ts:33-35, 46-51, 53-56</code></td><td><code>GetPersonByNameResult</code>, <code>PersonFilters { name?, rank?, dutyTitle? }</code>, and the <code>ValidationProblemDetails</code> doc comment, which lists <code>GET /Person/{name}</code>.</td></tr>
+<tr><td><code>ui/src/app/api/stargate-api.spec.ts:12,119-206</code></td><td>The <code>getPerson</code> describe block (U8-U13) and the import.</td></tr>
+</table></div>
+
+<h3>Probe results (scratch copies of base and head under <code>$CLAUDE_JOB_DIR/tmp</code>, fresh seeded Development DB, <code>dotnet run</code> on Kestrel; nothing left in the repo)</h3>
+<p>Head was base plus: <code>GetPeople</code> with <code>[FromQuery(Name="name"|"rank"|"dutyTitle"), ValidName, Description]</code> on its properties, the action taking <code>[FromQuery] GetPeople query</code>, a probe action taking <code>[FromQuery(Name = "")] GetPeople filters</code>, <code>GetPersonByName</code> deleted, and a Swashbuckle <code>IParameterFilter</code>. Both builds passed with <code>-warnaserror</code>. I sent 45 URLs to both servers:</p>
+<ul>
+<li><strong>Identical status and body</strong> (traceId ignored) for every surviving behaviour: no filter; exact name in any case and with space padding; fragments (<code>ra</code>), unknown name, <code>rank</code>, <code>dutyTitle</code>, combined filters; <code>?Name=</code>, <code>?NAME=</code>, <code>?DUTYTITLE=</code>; repeated <code>name</code> (first value wins); unknown parameter <code>foo</code>; empty, space-only and tab-only values (no filter); <code>%</code>, <code>_</code>, inner tab, <code>é</code>, edge NBSP, <code>x' OR '1'='1</code>, <code>..</code>, <code>a/b</code> (all 400 with the same body).</li>
+<li><strong>Swagger</strong>: <code>/Person</code> GET still has exactly the query parameters <code>name</code>, <code>rank</code>, <code>dutyTitle</code> with the same descriptions, <code>maxLength: 100</code> and the verbatim pattern. Responses are 200/400/500. Only <code>minLength: 0</code> disappears. <code>/Person/{name}</code> is gone, and <code>/Person/{personId}</code> has only <code>put</code>. The new filter also adds <code>maxLength</code>/<code>pattern</code> to <code>GET /AstronautDuty</code>'s <code>name</code> (additive and accurate).</li>
+<li><strong>Differences</strong> (all intended, listed in the next section): leading/trailing control whitespace and padding beyond 100 characters now return 200; the over-length message changed; the removed route returns 405; the prefix bypass appears without <code>Name = ""</code>.</li>
+</ul>
+
+<h2>Approach</h2>
+<h3>1. The query object is <code>GetPeople</code> itself (one class)</h3>
+<pre><code>// Business/Queries/GetPeople.cs
+public class GetPeople : IRequest&lt;GetPeopleResult&gt;
+{
+    [FromQuery(Name = "name"), ValidName, Description("Case-insensitive exact match on the person's full name. Empty or whitespace-only means no filter.")]
+    public string? Name { get; init; }
+
+    [FromQuery(Name = "rank"), ValidName, Description("Case-insensitive exact match on the current rank (e.g. MAJ). Excludes people with no assignment.")]
+    public string? Rank { get; init; }
+
+    [FromQuery(Name = "dutyTitle"), ValidName, Description("Case-insensitive exact match on the current duty title (e.g. Commander, RETIRED). Excludes people with no assignment.")]
+    public string? DutyTitle { get; init; }
+}
+
+// Controllers/PersonController.cs
+public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeople query, CancellationToken cancellationToken)
+{
+    var result = await _mediator.Send(query, cancellationToken);
+    return this.GetResponse(result);
+}</code></pre>
+<ul>
+<li><strong>Same validation for rank and dutyTitle.</strong> Today all three filters use the same pair of attributes (<code>:33</code>, <code>:35</code>, <code>:37</code>), so all three get the same <code>[ValidName]</code>. There is no separate rank or title vocabulary (task 009 territory).</li>
+<li><strong>Wire names</strong> stay exactly <code>name</code>, <code>rank</code>, <code>dutyTitle</code>, set by <code>[FromQuery(Name = ...)]</code> on each property. Without it, Swagger and the 400 <code>errors</code> keys would become <code>Name</code>/<code>Rank</code>/<code>DutyTitle</code>. Binding still ignores case on the key (verified).</li>
+<li><strong>The prefix is pinned to empty</strong> by <code>[FromQuery(Name = "")]</code> on the action parameter (see the warning card). Also needed because <code>[ApiController]</code> would otherwise infer <code>[FromBody]</code> for a complex type. Swagger still lists exactly three parameters (verified on the probe action).</li>
+<li><strong><code>init</code> setters</strong> bind correctly (verified). No <code>required</code> members, no <code>[JsonIgnore]</code> needed (the request is never serialised). <code>Rank</code> as a property name causes no problem.</li>
+<li><strong>Coupling.</strong> A <code>Microsoft.AspNetCore.Mvc</code> attribute now sits on a Business-layer type. This is accepted: it is what "one class" means, the project is a single assembly, and Business already references <code>StargateAPI.Controllers.BaseResponse</code>. The handler's own <code>Normalize</code> (<code>GetPeople.cs:60</code>) stays as defence in depth for direct MediatR callers and tests.</li>
+</ul>
+
+<h3>2. GET trimming is unified with the writes</h3>
+<p><code>[ValidName]</code> validates <code>Normalize(value)</code> (an ASCII trim), exactly as <code>POST</code>/<code>PUT</code> do. MVC still binds an empty or whitespace-only value to <code>null</code> (<code>ConvertEmptyStringToNull</code> uses <code>IsNullOrWhiteSpace</code>, which includes NBSP). <code>null</code> means "no filter" and <code>[ValidName]</code> accepts it. Exact list of response changes (from the probe; nothing that returned 200 before returns 400 now):</p>
+<div class="table-wrap"><table>
+<tr><th>Input (any of name, rank, dutyTitle)</th><th>Before</th><th>After</th></tr>
+<tr><td>Leading or trailing tab, LF, VT, FF or CR around a valid value (<code>%09Elena%20Vasquez</code>, <code>Elena%20Vasquez%0A</code>)</td><td>400 NameRule</td><td><span class="tag ok">200</span>, matches the trimmed value</td></tr>
+<tr><td>Raw length over 100 but at most 100 after trimming (<code>%20</code> + 100 letters)</td><td>400 "The field name must be a string with a maximum length of 100."</td><td><span class="tag ok">200</span></td></tr>
+<tr><td>Over 100 characters after trimming</td><td>400, message "The field <em>x</em> must be a string with a maximum length of 100." (plus the NameRule message if a character is also invalid)</td><td>400, exactly one message: the NameRule message (which says "at most 100 characters")</td></tr>
+<tr><td>Inner tab, NBSP at an edge, non-ASCII, <code>%</code>, <code>_</code>, punctuation only, injection strings</td><td>400 NameRule</td><td>400 NameRule (unchanged)</td></tr>
+<tr><td>Empty, spaces only, tab only, NBSP only, parameter absent</td><td>200, no filter</td><td>200, no filter (unchanged)</td></tr>
+</table></div>
+<p>The 400 body shape is unchanged: <code>ValidationProblemDetails</code> with <code>type</code>, <code>title</code>, <code>status</code>, <code>errors</code> and <code>traceId</code>; keys <code>name</code>/<code>rank</code>/<code>dutyTitle</code>; the value is never echoed. These are relaxations, so not breaking for clients, but the changelog records them.</p>
+
+<h3>3. Swagger keeps maxLength and pattern</h3>
+<p>Swashbuckle cannot read <code>[ValidName]</code>. A small <code>ValidNameParameterFilter : IParameterFilter</code> (new file <code>api/Swagger/ValidNameParameterFilter.cs</code>, registered in <code>Program.cs:25</code> as <code>AddSwaggerGen(o =&gt; o.ParameterFilter&lt;ValidNameParameterFilter&gt;())</code>) sets <code>maxLength = InputRules.MaxLength</code> and <code>pattern = InputRules.AllowedCharactersPattern</code> on any parameter whose property or parameter carries <code>[ValidName]</code>. The probe version compiled under Swashbuckle 10.3 / Microsoft.OpenApi 2.x, with the signature <code>Apply(IOpenApiParameter, ParameterFilterContext)</code> and a cast of <code>parameter.Schema</code> to <code>OpenApiSchema</code>. Effects: <code>/Person</code> parameters as before minus <code>minLength: 0</code>; <code>/AstronautDuty</code> GET <code>name</code> gains <code>maxLength</code>/<code>pattern</code>. Request-body schemas are unchanged.</p>
+
+<h3>4. Removal</h3>
+<p>Delete <code>GetPersonByName.cs</code> and the action at <code>PersonController.cs:51-70</code>. Update the endpoint description at <code>:24-28</code> to say values are trimmed of ASCII whitespace and then validated with the shared name rule. Reword the two comments that mention <code>GetPersonByName</code>, so that <code>grep -rw GetPersonByName exercise1/api exercise1/api.Tests exercise1/ui/src</code> returns nothing. The build fails if anything still references the type.</p>
+
+<h3>Alternatives rejected</h3>
+<ul>
+<li><strong>Keep <code>[StringLength]</code> + <code>[RegularExpression]</code> on the properties</strong> (Swagger byte-identical, no filter). Rejected because those attributes validate the raw value, so GET would keep disagreeing with the writes, which the task explicitly asks to fix.</li>
+<li><strong>A separate <code>PersonQuery</code> DTO wrapped into <code>GetPeople</code></strong>. Rejected because the attributes sit fine on <code>GetPeople</code>, and the Decision says split only if they cannot.</li>
+<li><strong>Route constraint <code>{personId:int}</code> on PUT</strong> to get a 404 for <code>GET /Person/Ada</code>. Rejected as the default (Q1): <code>GET /Person/123</code> would still be 405, and <code>PUT /Person/abc</code> would change from 400 (binding error, task 002) to 404. That is a behaviour change to an endpoint outside this task's scope.</li>
+<li><strong>A catch-all <code>GET /Person/{*rest}</code> returning 404</strong>. Rejected because it keeps code for a route that should not exist, and a handler would run.</li>
+</ul>
+
+<h2>Changes by platform</h2>
+<h3>api</h3>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>api/Business/Queries/GetPeople.cs</code></td><td>Attributes on the three properties (above). Add <code>using Microsoft.AspNetCore.Mvc; using System.ComponentModel;</code>. Replace the XML <code>&lt;summary&gt;</code>s with the <code>[Description]</code>s (or keep both). Handler and SQL unchanged.</td></tr>
+<tr><td><code>api/Controllers/PersonController.cs</code></td><td><code>GetPeople([FromQuery(Name = "")] GetPeople query, CancellationToken)</code> sends <code>query</code> as is. Add a one-line comment on why <code>Name = ""</code>. Endpoint description wording. Delete the <code>GetPersonByName</code> action. <code>PUT</code> and <code>POST</code> untouched.</td></tr>
+<tr><td><code>api/Business/Queries/GetPersonByName.cs</code></td><td>Deleted.</td></tr>
+<tr><td><code>api/Swagger/ValidNameParameterFilter.cs</code> (new), <code>api/Program.cs</code></td><td>Filter and its registration.</td></tr>
+<tr><td><code>api/Business/Commands/CreateAstronautDuty.cs:77</code>, <code>api/Business/Queries/GetAstronautDutiesByName.cs:18</code></td><td>Comment wording only. The resolution order stays documented without naming the deleted type.</td></tr>
+<tr><td><code>api/README.md</code></td><td>Changelog entries (see Risks and rollout). Any other mention of <code>/Person/{name}</code> outside the changelog history (none found by grep).</td></tr>
+<tr><td><code>api.Tests/*</code></td><td>See Tests.</td></tr>
+</table></div>
+<h3>ui</h3>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>ui/src/app/api/stargate-api.ts</code></td><td>Delete <code>getPerson</code> and the <code>GetPersonByNameResult</code> import. <code>listPeople</code>, <code>getPeople</code> and <code>FILTER_KEYS</code> are unchanged in behaviour. <code>FILTER_KEYS</code> may be typed <code>as const satisfies readonly (keyof PersonFilters)[]</code>.</td></tr>
+<tr><td><code>ui/src/app/api/models.ts</code></td><td>Delete <code>GetPersonByNameResult</code>. <code>PersonFilters</code> keeps its shape with a new doc comment (from <code>types.ts</code>). <code>ValidationProblemDetails</code> doc comment drops <code>GET /Person/{name}</code>.</td></tr>
+<tr><td><code>ui/src/app/api/stargate-api.spec.ts</code></td><td>Delete the <code>getPerson</code> block and import. Add UI-tests from <code>tests.md</code>.</td></tr>
+</table></div>
+<h3>db, infra</h3>
+<p>None. No migration, no schema change, no data touched.</p>
+
+<h2>Contracts affected</h2>
+<div class="table-wrap"><table>
+<tr><th>Endpoint</th><th>Change</th><th>Breaking?</th></tr>
+<tr><td><code>GET /Person/{name}</code></td><td>Removed. Any GET/HEAD on <code>/Person/{x}</code> returns 405, <code>Allow: PUT</code>, empty body.</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>GET /Person</code></td><td>Same parameters, same 200/400 shapes. Trim before validation (some 400s become 200). Over-length 400 message text changes. Swagger loses <code>minLength: 0</code>.</td><td><span class="tag ok">not breaking</span> (relaxation; message text is display-only per <code>models.ts</code>)</td></tr>
+<tr><td><code>GET /AstronautDuty</code></td><td>Swagger only: <code>name</code> gains <code>maxLength</code> and <code>pattern</code>. Behaviour unchanged.</td><td><span class="tag ok">not breaking</span></td></tr>
+<tr><td>UI <code>StargateApi.getPerson</code>, <code>GetPersonByNameResult</code></td><td>Removed. No in-repo caller.</td><td><span class="tag bad">breaking</span> (internal API surface)</td></tr>
+<tr><td>Schema</td><td>None.</td><td>-</td></tr>
+</table></div>
+<p>The task's third breaking item ("<code>?name=</code> changes from contains to exact") already shipped and is in the changelog under task 006 (C2). It is not repeated as new.</p>
+
+<h2>Domain rules</h2>
+<ul>
+<li><strong>Rule 1 (name identifies a person).</strong> The only lookup by name is <code>GET /Person?name=</code>: exact, trimmed, ASCII case-insensitive, backed by the unique NOCASE index from 006. SQL unchanged. Q3 tests show it returns at most that one person, and an unknown name gives 200 with an empty list.</li>
+<li><strong>Rule 2 (no astronaut rows without an assignment).</strong> SQL unchanged (<code>LEFT JOIN</code>, filters on the joined columns). Q3 tests: Mira (unassigned) is returned for <code>name</code> alone, and never with <code>rank</code> or <code>dutyTitle</code>. Empty strings for <code>currentRank</code>/<code>currentDutyTitle</code> stay as before.</li>
+<li>Rules 3-7 are not touched (task 009). Regression only.</li>
+</ul>
+
+<h2>Tests</h2>
+<p>Full Given/When/Then is in <a href="../contracts/008/tests.md">tests.md</a>. Inventory:</p>
+<h3>Deleted</h3>
+<ul>
+<li><code>GetPersonByNameQueryTests.cs</code> (whole file, 10 tests).</li>
+<li><code>ResponseShapeTests.GetPersonByNameResult_HasTheDocumentedShape_AndWritesNullPerson</code> and <code>S1_NotFoundResult_FromTheRealHandler_HasTheDocumentedShape</code>.</li>
+<li><code>PersonControllerTests.C3</code>, <code>C4</code>, and the <code>GetPersonByName</code> line of <code>C5</code>.</li>
+<li><code>PersonHttpTests.H1b</code>, <code>H5</code> (F2 covers it), <code>H6</code>, <code>H8</code>, and the two <code>/Person/...</code> rows of <code>H2b</code>.</li>
+</ul>
+<h3>Rewritten</h3>
+<ul>
+<li><code>PersonControllerTests.C1</code>, <code>C2</code>, <code>C5</code>: pass a <code>GetPeople</code> object.</li>
+<li><code>PersonHttpTests.H2b</code>: the four query rows (<code>abc%0A</code>, <code>%0Aabc</code>) now expect <strong>200</strong> (trimmed). Renamed <code>H2b_EdgeNewlines_AreTrimmed_LikeWrites</code>.</li>
+<li><code>H3</code>: query URL only.</li>
+<li><code>H5b</code>: <code>?name=aoife%20o'brien</code> returns her in <code>people</code>.</li>
+<li><code>H9</code>: asserts the absence of <code>/Person/{name}</code> instead of its responses.</li>
+<li><code>H1</code>: also asserts the single NameRule message.</li>
+<li><code>NameRuleHttpTests.X1</code>: drop the <code>/Person/</code> GET row.</li>
+</ul>
+<h3>Kept unchanged</h3>
+<p><code>GetPeopleQueryTests</code> (handler level, <code>new GetPeople { ... }</code> still compiles), <code>PersonHttpTests</code> H1, H2, H2c, H2d, H4, H7, H10, F1-F7, <code>ResponseShapeTests.GetPeopleResult_*</code> and the duty shape tests, <code>PersonUpdateHttpTests</code>, <code>PersonCreate*</code>, <code>AstronautDuty*</code>, <code>PersonHttpProductionTests</code>, migration, seed and initializer tests.</p>
+<h3>Added</h3>
+<ul>
+<li><strong>PersonQueryHttpTests</strong> (new file):
+  <ul>
+  <li>Q1 removed route: 405, <code>Allow: PUT</code>, empty body, DB unchanged.</li>
+  <li>Q2 parameter-name casing.</li>
+  <li>Q3 each filter alone, pairs and triple, AND, rule 2, exact match, unknown name returns 200 with an empty list and the exact envelope.</li>
+  <li>Q4 repeated parameter: the first value wins.</li>
+  <li>Q5 unknown and prefix-like parameters (<code>query</code>, <code>Query</code>, <code>query.name</code>, <code>foo</code>) are ignored and never bypass validation.</li>
+  <li>Q6 trimming of every ASCII control whitespace at both edges and the 100-after-trim boundary.</li>
+  <li>Q7 400 cases with the exact key and message, no echo, several invalid keys at once.</li>
+  <li>Q8 hostile values (SQL-like, LIKE wildcards, very long input) never widen results or produce a 500.</li>
+  <li>Q9 Swagger.</li>
+  </ul></li>
+<li><strong>PersonCreateKestrelTests</strong>: Q1k, the 405 with an empty body on real Kestrel.</li>
+<li><strong>GetPeopleValidationTests</strong> (unit, <code>Validator.TryValidateObject</code>): V1 to V3, each property carries the rule independently and accepts trimmed values.</li>
+<li><strong>PersonControllerTests</strong>: C8, the controller sends the very instance it received (captured by the existing <code>CapturingMediator</code>).</li>
+<li><strong>UI</strong>:
+  <ul>
+  <li>UI-1, <code>listPeople({ name: 'Elena Vasquez' })</code> sends <code>?name=Elena%20Vasquez</code>.</li>
+  <li>UI-2, <code>listPeople()</code> sends no params.</li>
+  <li>UI-3, <code>getPerson</code> no longer exists on <code>StargateApi</code>.</li>
+  <li>UI-4, <code>PersonFilters</code> has exactly the keys <code>name</code>, <code>rank</code>, <code>dutyTitle</code> (a compile-time check plus U3).</li>
+  </ul>
+  Existing U1-U7, U14, U15 stay.</li>
+</ul>
+<h3>Mutation targets (each must turn at least one test red)</h3>
+<ul>
+<li>Drop <code>Name = ""</code> on the action parameter (Q5a, Q5b).</li>
+<li>Drop <code>[FromQuery]</code> on the action parameter (415/400 instead of 200: Q3a).</li>
+<li>Drop <code>Name = "name"</code>, <code>"rank"</code> or <code>"dutyTitle"</code> on a property (Q7 exact error key, Q9 parameter names).</li>
+<li>Remove <code>[ValidName]</code> from any one property (V1, Q7).</li>
+<li>Replace <code>[ValidName]</code> with the old raw attributes (Q6).</li>
+<li>Controller builds a new <code>GetPeople</code> and drops a field (C8, Q3).</li>
+<li>Handler match changed to <code>LIKE</code> or <code>instr</code> (F1, Q3).</li>
+<li>Handler trim removed (GetPeopleQueryTests P-tests).</li>
+<li>Re-adding <code>GET /Person/{name}</code> (Q1, Q9).</li>
+<li>Filter not registered (Q9).</li>
+</ul>
+
+<h2>Risks and rollout</h2>
+<ul>
+<li><strong>Data</strong>: none. Read-only endpoint, no migration.</li>
+<li><strong>Backward compatibility</strong>: callers of <code>GET /Person/{name}</code> get 405 (not 404). They must switch to <code>?name=</code> and treat an empty <code>people</code> list as "not found". The only in-repo caller (UI <code>getPerson</code>) is removed in the same commit. GET filters accept more input than before (edge control whitespace, padding). No input that was accepted is now rejected.</li>
+<li><strong>Binding pitfalls</strong>: the prefix bypass (mitigated with <code>Name = ""</code> and locked by Q5). Swagger depends on a custom filter (locked by Q9).</li>
+<li><strong>Rollback</strong>: revert the merge commit. No state to undo.</li>
+<li><strong>Changelog</strong> (<code>api/README.md</code>, under "Changelog (breaking changes)", newest first):
+  <ul>
+  <li>Task 008 (BREAKING): <code>GET /Person/{name}</code> is removed. Any GET on <code>/Person/{x}</code> now returns <strong>405 Method Not Allowed</strong> with <code>Allow: PUT</code> and an empty body (the path is <code>PUT /Person/{personId}</code>'s). Use <code>GET /Person?name=&lt;name&gt;</code>. An unknown person is 200 with an empty <code>people</code> list, not 404. <code>?name=</code> has been exact since task 006 (C2).</li>
+  <li>Task 008 (not breaking): <code>GET /Person</code> filters are trimmed of ASCII whitespace before validation, like POST/PUT. A leading or trailing tab, LF, VT, FF or CR, or padding beyond 100 characters, now returns 200 instead of 400. An over-long value's 400 message is now the shared name-rule message (one message instead of "The field x must be a string with a maximum length of 100."). Swagger: <code>/Person</code> query parameters no longer show <code>minLength: 0</code>; <code>GET /AstronautDuty</code>'s <code>name</code> now shows <code>maxLength</code> and <code>pattern</code>.</li>
+  </ul></li>
+<li><strong>Not editable by agents</strong>: <code>CLAUDE.md</code>'s layout line still lists <code>GetPersonByName</code> under <code>Business/Queries/</code>. Please update it yourself (Q3).</li>
+</ul>
+
+<h3>QA must check (fresh seeded Development DB, BASE = e950203 vs HEAD)</h3>
+<ol>
+<li>Send every URL from the probe list in <a href="../contracts/008/tests.md">tests.md section 6</a> to BASE and HEAD. Same status and body (traceId ignored) for all rows marked "same". Exactly the listed differences for the rest.</li>
+<li>Removed route on HEAD: <code>GET</code> and <code>HEAD</code> on <code>/Person/Elena%20Vasquez</code>, <code>/Person/Nobody</code>, <code>/Person/1</code>, <code>/Person/%20</code>, <code>/Person/a%2Fb</code> each return 405, <code>Allow: PUT</code>, <code>Content-Length: 0</code>. The DB is unchanged afterwards.</li>
+<li>Swagger <code>/swagger/v1/swagger.json</code> diff BASE to HEAD: only the removal of <code>/Person/{name}</code> and <code>GetPersonByNameResult</code>, the removal of <code>minLength: 0</code> on three parameters, the <code>/Person</code> GET description wording, and the <code>/AstronautDuty</code> GET <code>name</code> additions.</li>
+<li>UI: <code>npm test -- --watch=false</code> and <code>npm run build</code> pass. Through the dev proxy, <code>/api/Person</code>, <code>/api/Person?rank=maj</code>, <code>/api/Person?name=elena%20vasquez</code> return the same as the API directly, and <code>/api/Person/Elena%20Vasquez</code> returns 405. Grep finds no <code>getPerson</code> or <code>GetPersonByNameResult</code>.</li>
+<li>Regression: <code>POST /Person</code> (201, then <code>Location</code> resolves to exactly that person via <code>GET /Person?name=</code>), <code>PUT /Person/{id}</code> (200/404/409/400; <code>PUT /Person/abc</code> still 400), <code>GET /AstronautDuty?name=</code> (200/404/400), <code>POST /AstronautDuty</code> (201/404/409/400).</li>
+<li><code>dotnet build -warnaserror</code>, <code>dotnet test</code> (coverage reported), and <code>grep -rw GetPersonByName exercise1/</code> outside <code>docs/</code> and <code>bin/obj</code> is empty.</li>
+</ol>
+
+<h3>Unverified items (cheap checks for the developers)</h3>
+<ul>
+<li>The prefix pin was verified with the parameter named <code>filters</code>, not <code>query</code>. Q5a-Q5c check it with the final name.</li>
+<li>The probe ran on Kestrel via <code>dotnet run</code>. <code>WebApplicationFactory</code>'s TestServer should give the same 405 and empty body. Q1 checks it there, Q1k on Kestrel.</li>
+<li>The full existing suite was not run against the probe head. <code>dotnet test</code> is the check.</li>
+<li>Vitest and the Angular build were not run. <code>npm test -- --watch=false</code> and <code>npm run build</code> are the checks.</li>
+</ul>
+
+<h2>Subtasks</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Platform / agent</th><th>Scope</th><th>Depends on</th></tr>
+<tr><td>S1</td><td>api / api-dev</td><td>Query object, controller, removal, Swagger filter, comment cleanup, README changelog, all api.Tests changes (sections 1-4 of tests.md).</td><td>Approved contract only</td></tr>
+<tr><td>S2</td><td>ui / ui-dev</td><td>Remove <code>getPerson</code> and <code>GetPersonByNameResult</code>, doc comments, Vitest (section 5 of tests.md).</td><td>Approved contract only</td></tr>
+<tr><td>S3</td><td>lead, then qa-tester</td><td>Integrate S1 and S2 (no shared files), run both suites, then QA as above.</td><td>S1, S2</td></tr>
+</table></div>
+<p>S1 and S2 touch disjoint folders and can run in parallel.</p>
+
+<h2>Contracts</h2>
+<ul>
+<li><a href="../contracts/008/contract.html">contract.html</a>: one-page summary with breaking changes flagged</li>
+<li><a href="../contracts/008/openapi.yaml">openapi.yaml</a></li>
+<li><a href="../contracts/008/data.md">data.md</a></li>
+<li><a href="../contracts/008/types.ts">types.ts</a></li>
+<li><a href="../contracts/008/tests.md">tests.md</a></li>
+</ul>
+
+<h2>Questions for you</h2>
+<ol>
+<li><strong>Q1: 405 instead of 404 for the removed route.</strong> Recommendation: <strong>accept 405</strong> (<code>Allow: PUT</code>, empty body). It is correct HTTP, and it meets every other part of your decision. The alternative is a <code>{personId:int}</code> constraint on PUT: <code>GET /Person/Ada</code> would return 404 but <code>GET /Person/123</code> would still return 405, and <code>PUT /Person/abc</code> would change from 400 to 404. If you choose that, I revise only the Q1 rows, the openapi note and the changelog line.</li>
+<li><strong>Q2: The over-length 400 message changes</strong> to the shared name-rule message (it already mentions "at most 100 characters"), the same as writes. Recommendation: accept. Keeping the old text would need a second attribute that validates the raw value, which defeats the trimming unification.</li>
+<li><strong>Q3: CLAUDE.md layout line</strong> still lists <code>GetPersonByName</code>. Agents may not edit CLAUDE.md. Recommendation: change it to <code>(GetPeople, GetAstronautDutiesByName)</code> yourself when you approve.</li>
+</ol>
+</main>
+</body>
+</html>

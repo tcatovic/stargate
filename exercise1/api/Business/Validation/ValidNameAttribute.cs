@@ -14,6 +14,7 @@ namespace StargateAPI.Business.Validation
         }
 
         public override bool IsValid(object? value) =>
-            value is null || (value is string text && InputRules.IsValidName(InputRules.Normalize(text)));
+            value is null
+            || (value is string text && text.Length <= InputRules.MaxRawLength && InputRules.IsValidName(InputRules.Normalize(text)));
     }
 }

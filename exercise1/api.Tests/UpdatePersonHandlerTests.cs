@@ -42,6 +42,7 @@ public class UpdatePersonHandlerTests
     {
         using var db = SeededDatabase();
         var mira = IdOf(db, "Mira Okafor");
+        var childrenBefore = db.Dump("AstronautDetail", "AstronautDuty");
         var othersBefore = db.Strings($"SELECT \"Id\" || '|' || \"Name\" FROM \"Person\" WHERE \"Id\" <> {mira} ORDER BY \"Id\"");
 
         var result = await Rename(db, mira, "Mira Okafor-Lindqvist");
@@ -57,6 +58,7 @@ public class UpdatePersonHandlerTests
         Assert.Null(result.Person.CareerStartDate);
         Assert.Null(result.Person.CareerEndDate);
         Assert.Equal("Mira Okafor-Lindqvist", StoredName(db, mira));
+        Assert.Equal(childrenBefore, db.Dump("AstronautDetail", "AstronautDuty"));
         Assert.Equal(othersBefore, db.Strings($"SELECT \"Id\" || '|' || \"Name\" FROM \"Person\" WHERE \"Id\" <> {mira} ORDER BY \"Id\""));
     }
 
@@ -295,6 +297,74 @@ public class UpdatePersonHandlerTests
             () => handler.Handle(new UpdatePerson { PersonId = mira, Name = "Mira Renamed" }, cts.Token));
 
         Assert.Equal(before, db.Dump());
+    }
+
+    [Fact]
+    public async Task H16_ARowDeletedBetweenLoadAndSave_Is404_NotAnException()
+    {
+        using var db = SeededDatabase();
+        var mira = IdOf(db, "Mira Okafor");
+        var deleter = new RenameOnAnotherConnection(db.ConnectionString, $"DELETE FROM \"Person\" WHERE \"Id\" = {mira}");
+
+        var result = await Rename(db, mira, "Mira Renamed", null, deleter);
+
+        Assert.True(deleter.Ran);
+        Assert.Equal(404, result.ResponseCode);
+        Assert.Equal("Person not found", result.Message);
+        Assert.False(result.Success);
+        Assert.Null(result.Person);
+        Assert.Equal(0, db.Scalar<long>($"SELECT COUNT(*) FROM \"Person\" WHERE \"Id\" = {mira}"));
+        Assert.Equal(5, db.Scalar<long>("SELECT COUNT(*) FROM \"Person\""));
+    }
+
+    [Fact]
+    public async Task H17_ARowDeletedAfterTheSaveButBeforeTheReadBack_Is404_NotA200WithNoPerson()
+    {
+        using var db = SeededDatabase();
+        var mira = IdOf(db, "Mira Okafor");
+        var deleter = new DeleteAfterSave(db.ConnectionString, $"DELETE FROM \"Person\" WHERE \"Id\" = {mira}");
+
+        var result = await Rename(db, mira, "Mira Renamed", null, deleter);
+
+        Assert.True(deleter.Ran);
+        Assert.Equal(404, result.ResponseCode);
+        Assert.Equal("Person not found", result.Message);
+        Assert.False(result.Success);
+        Assert.Null(result.Person);
+        Assert.Equal(0, db.Scalar<long>($"SELECT COUNT(*) FROM \"Person\" WHERE \"Id\" = {mira}"));
+    }
+
+    [Fact]
+    public async Task H18_AnOverlongRawName_IsRejectedWithoutBeingNormalised()
+    {
+        using var db = SeededDatabase();
+        var mira = IdOf(db, "Mira Okafor");
+        var before = db.Dump();
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => Rename(db, mira, new string('a', 801)));
+
+        Assert.DoesNotContain("aaaa", ex.Message);
+        Assert.Equal(before, db.Dump());
+        // 800 raw characters is within the raw bound but still not a valid name (over 100 after normalising).
+        await Assert.ThrowsAsync<ArgumentException>(() => Rename(db, mira, new string('a', 800)));
+        Assert.Equal(before, db.Dump());
+    }
+
+    private sealed class DeleteAfterSave(string connectionString, string sql) : SaveChangesInterceptor
+    {
+        public bool Ran { get; private set; }
+
+        public override ValueTask<int> SavedChangesAsync(
+            SaveChangesCompletedEventData eventData, int result, CancellationToken cancellationToken = default)
+        {
+            Ran = true;
+            using var connection = new SqliteConnection(connectionString);
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
+            return base.SavedChangesAsync(eventData, result, cancellationToken);
+        }
     }
 
     private sealed class RenameOnAnotherConnection(string connectionString, string sql) : SaveChangesInterceptor

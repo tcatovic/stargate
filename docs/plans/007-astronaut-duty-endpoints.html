@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan 007: Fix the AstronautDuty endpoints (SQL injection, GET by name query, validated create)</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.5rem; margin:.4rem 0; } h2 { font-size:1.15rem; margin:1.8rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  h3 { font-size:1rem; margin:1.2rem 0 .3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code, pre { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; }
+  code { background: var(--code); padding:.08em .3em; border-radius:4px; }
+  pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 007 &middot; plan revision 1 &middot; baseline <code>main</code> at <code>280fcd9</code> (tasks 001-006 merged) &middot; branch <code>task/007-astronaut-duty-endpoints</code> &middot; status: awaiting approval (plan and contracts together)</p>
+<h1>Plan 007: Fix the AstronautDuty endpoints</h1>
+<p class="meta">SQL injection first, then <code>GET /AstronautDuty?name=</code>, then a validated <code>POST /AstronautDuty</code>. Contracts: <a href="../contracts/007/contract.html">docs/contracts/007/contract.html</a>.</p>
+
+<h2>1. Summary and verdict</h2>
+<div class="card bad"><p><strong>The problem is real, and I confirmed it on <code>main</code>.</strong> Both duty handlers build SQL by string interpolation of the person's name. QA for task 006 replayed the attack (<code>docs/qa/006-create-person-endpoint.html</code>, observation 1). A person named <code>a' OR Id IS 3 OR 'a</code> was created through the unauthenticated <code>POST /Person</code>, then a duty was posted for that name, and the duty was written to Tomas Lindqvist (PersonId 3). The attack closed his Pilot duty and overwrote his AstronautDetail. A real name such as <code>Aoife O'Brien Jr.</code> got a 500 whose body contained the SQLite syntax error and a stack trace.</p></div>
+<p>The task's premises are all correct against <code>280fcd9</code>, with one detail to add. Leaving out <code>dutyStartDate</code> does more than store <code>0001-01-01</code>. For a person who already has a duty, the handler computes <code>DateTime.MinValue.AddDays(-1)</code>, which throws <code>ArgumentOutOfRangeException</code>, and the caller gets a 500 (I verified this in a scratch probe). That is one more reason for the date bounds in section 4.4.</p>
+<p><strong>Verdict: <code>multi</code></strong> (api + ui). The task changes a response contract the UI consumes: the <code>GET</code> route moves to a query parameter, the 404 is new, and the duty item shape is fixed. CLAUDE.md requires the UI client to change in the same commit. The UI work is small, but it is independent once the contract is fixed. This is the same split as tasks 002 and 006. The API part is one subtask: the security fix and the POST hardening rewrite the same file, so splitting it would only create merge conflicts.</p>
+
+<h2>2. Current behaviour (main at 280fcd9)</h2>
+<div class="table-wrap"><table>
+<tr><th>Where</th><th>What happens</th></tr>
+<tr><td><code>Business/Commands/CreateAstronautDuty.cs:56-58</code></td><td><code>$"SELECT * FROM [Person] WHERE '{request.Name}' = Name"</code> runs through Dapper. This is the injection. Lines 70 and 100 also interpolate <code>{person.Id}</code> (an int, so not exploitable, but still forbidden).</td></tr>
+<tr><td><code>CreateAstronautDuty.cs:22-43</code> (<code>CreateAstronautDutyPreProcessor</code>)</td><td>Runs a separate, parameterised EF lookup by exact name (<code>==</code> on the NOCASE column). It cannot pass the person it found to the handler, so the handler looks the person up a second time with different SQL. Unknown person and duplicate duty both throw <code>BadHttpRequestException("Bad Request")</code>, which gives a 400, with a stack-trace page in Development. The duplicate check at line 37 is not scoped to the person and compares the raw request date, including any time part.</td></tr>
+<tr><td><code>CreateAstronautDuty.cs:72-121</code></td><td>Rules 3-7 as they work today. AstronautDetail and the latest duty are read with Dapper (untracked), then re-attached with <code>Update()</code>. The handler closes the latest duty by start date (no tie-break) at start minus 1 day and saves everything in one <code>SaveChangesAsync</code>. For a first duty of <code>RETIRED</code>, <code>CareerEndDate</code> is set to the start date itself (line 83). The <code>RETIRED</code> check is ordinal and case-sensitive. No <code>CancellationToken</code> is passed.</td></tr>
+<tr><td><code>CreateAstronautDuty.cs:11-20</code></td><td>The MediatR command is also the request body. <code>Name</code>, <code>Rank</code> and <code>DutyTitle</code> are <code>required</code>, so System.Text.Json throws on a missing member and the client gets 400 "The input was not valid.". Otherwise these fields are unbounded. <code>DutyStartDate</code> is a non-nullable <code>DateTime</code> that silently defaults when omitted.</td></tr>
+<tr><td><code>Business/Queries/GetAstronautDutiesByName.cs:28,39</code></td><td>Interpolated SQL for the person (<code>'{request.Name}' = a.Name</code>) and for the duties (<code>{person.PersonId}</code>). An unknown name returns 200 with a null person. Each duty item is the entity <code>AstronautDuty</code>, which serialises <code>"person": null</code> (pinned in <code>ResponseShapeTests</code> and confirmed by probe). The handler is unreachable.</td></tr>
+<tr><td><code>Controllers/AstronautDutyController.cs:19-40</code></td><td><code>[HttpGet("{name}")]</code> sends <code>GetPersonByName</code>, so the response has no duties. The action has a <code>try/catch</code> that returns <code>ex.Message</code> in a 500 body. There is no validation attribute and no <code>CancellationToken</code>.</td></tr>
+<tr><td><code>AstronautDutyController.cs:42-47</code></td><td>POST binds the command directly. It has no <code>[Consumes]</code>, no <code>[RequestSizeLimit]</code> and no Swagger attributes, and returns 200 with no <code>Location</code>.</td></tr>
+<tr><td><code>Program.cs:35</code></td><td><code>cfg.AddRequestPreProcessor&lt;CreateAstronautDutyPreProcessor&gt;()</code>.</td></tr>
+<tr><td><code>ui/src/app/api/stargate-api.ts:149-153</code></td><td><code>getDuties</code> calls <code>/api/AstronautDuty/${encodeURIComponent(name)}</code> and returns the raw result. There is no 404 handling and no test.</td></tr>
+<tr><td><code>api.Tests/NullPersonGuardTests.cs</code></td><td>Calls the handlers directly and documents them as unreachable. Two tests exercise the pre-processor.</td></tr>
+</table></div>
+<p>A grep of the whole API project (excluding Migrations, bin and obj) for <code>$"</code>, <code>$"""</code>, <code>FromSqlRaw</code>, <code>ExecuteSqlRaw</code>, <code>QueryAsync</code>, <code>QueryFirst*</code> and <code>CommandText</code> finds interpolated SQL <strong>only</strong> in these two files. The other interpolated strings are exception messages in <code>StarbaseDatabase.cs:55,64</code> and <code>DevelopmentDatabaseInitializer.cs:134</code>, which are not SQL. <code>GetPeople</code>, <code>GetPersonByName</code> and <code>UpdatePerson</code> already use static SQL with Dapper parameters.</p>
+
+<h2>3. Approach</h2>
+<h3>3.1 Security fix (first, non-negotiable)</h3>
+<ol>
+<li><strong>Delete <code>CreateAstronautDutyPreProcessor</code></strong> and its registration in <code>Program.cs</code>, as task 006 did for people. The handler resolves the person <strong>exactly once</strong> with one parameterised EF LINQ query. It trims the name (<code>InputRules.Normalize</code>), matches case-insensitively and exactly (<code>EF.Functions.Collate(p.Name, "NOCASE") == name</code>), orders by Id and takes the first row. Every later read and write uses that person's <code>Id</code> and nothing else. The response's <code>Location</code> header uses that person's stored <code>Name</code>.</li>
+<li><strong>The create handler uses EF LINQ only</strong>, with no Dapper in the write path. It loads the detail and the latest duty as tracked entities and changes them in place, then calls one <code>SaveChangesAsync(ct)</code>. This replaces the Dapper-read-then-<code>Update()</code> pattern, so every value reaches SQLite as a parameter.</li>
+<li><strong>The GET handler keeps Dapper</strong> (the project convention for reads). It uses two static <code>const string</code> raw literals with <code>@Name</code> and <code>@PersonId</code> parameters through <code>CommandDefinition</code> with the token, the same pattern as <code>GetPersonByName</code> and <code>UpdatePerson.ReadBackSql</code>. The exact SQL is in <code>data.md</code> section 2.</li>
+<li>The duty-loading query is parameterised: <code>SELECT Id, PersonId, Rank, DutyTitle, DutyStartDate, DutyEndDate FROM [AstronautDuty] WHERE PersonId = @PersonId ORDER BY DutyStartDate DESC, Id DESC</code>. It maps to a new DTO, <code>AstronautDutyItem</code>.</li>
+<li>Neither handler, nor anything they call, contains a <code>$</code>-string, concatenation, <code>FromSqlRaw</code> or <code>ExecuteSqlRaw</code>. Values only ever travel as parameters.</li>
+</ol>
+<p><strong>Source-level guard test: no.</strong> The test reviewers removed source scans in task 006 (<code>GetPeopleQueryTests.F5</code>, R25's text checks) because they break on harmless refactors and pass on real regressions written differently (for example <code>string.Format</code>, <code>+</code> or a helper method). The guard here is behavioural:</p>
+<ul>
+<li>The hostile HTTP matrix proves the outcome: other people's rows stay byte-identical.</li>
+<li>For the create path, which is EF-only by design, a handler test attaches the existing <code>CountingCommandInterceptor</code>. It asserts that no executed <code>CommandText</code> contains the hostile marker text, so values arrived as parameters. That test fails if someone reintroduces <code>FromSqlRaw</code>/<code>FromSqlInterpolated</code> with concatenation or a raw command through EF.</li>
+<li>Its limit, stated honestly: Dapper calls on <code>_context.Connection</code> do not pass through EF interceptors. For the GET path the behavioural read-path tests are the guard. The <code>$"SELECT</code>/<code>$"""</code>/<code>FromSqlRaw</code> grep from the acceptance criteria is a security-reviewer and QA checklist item, not a unit test.</li>
+</ul>
+
+<h3>3.2 GET /AstronautDuty?name=</h3>
+<ul>
+<li><code>[HttpGet("")]</code> with <code>[FromQuery, Required, ValidName, Description(...)] string? name</code> and <code>CancellationToken</code>. The action sends <code>GetAstronautDutiesByName</code> and returns <code>this.GetResponse(result)</code>. There is no <code>try/catch</code>, and the controller no longer references <code>GetPersonByName</code> (task 008 depends on this).</li>
+<li>A missing or empty <code>name</code> is 400 (Required). Whitespace-only is 400 (Required plus the name rule). Over 100 characters, a disallowed character, or no letter or digit is 400 (the rule). The body is a <code>ValidationProblemDetails</code> under key <code>name</code> and never echoes the input.</li>
+<li>Status codes: 200 with <code>person</code> plus <code>astronautDuties</code>, newest first (empty for a person with no assignment, rule 2). An unknown name is <strong>404</strong> with <code>{person:null, astronautDuties:[], success:false, message:"Person not found", responseCode:404}</code>.</li>
+<li><strong>Exact response DTO:</strong> duty items become the new <code>Business/Dtos/AstronautDutyItem</code> with <code>{id, personId, rank, dutyTitle, dutyStartDate, dutyEndDate}</code>. The <code>"person": null</code> member disappears. This is not a break for any consumer, because the old route never returned duties, and the UI's <code>AstronautDuty</code> interface already has exactly these six fields. Returning a DTO instead of the EF entity keeps the wire shape independent of the entity's navigation properties.</li>
+<li><strong><code>GET /AstronautDuty/{name}</code> is removed.</strong> No action matches any more, so routing answers <strong>404 with an empty body</strong>. A test pins this.</li>
+</ul>
+
+<h3>3.3 POST /AstronautDuty</h3>
+<ul>
+<li>There is a new body type, <code>CreateAstronautDutyRequest</code>, with nullable properties, like <code>CreatePersonRequest</code>:
+  <ul>
+  <li><code>name</code>, <code>rank</code> and <code>dutyTitle</code> are <code>[Required, ValidName]</code> (the shared ASCII rule; <code>RETIRED</code>, <code>Mission Specialist</code> and <code>2LT</code> all pass).</li>
+  <li><code>dutyStartDate</code> is a <code>DateTime?</code> with <code>[Required, ValidDutyDate]</code>.</li>
+  </ul>
+  The MediatR command stops being the body. It keeps raw values, and the handler normalises them.</li>
+<li><code>[Consumes("application/json")]</code>, <code>[RequestSizeLimit(4096)]</code>, <code>EndpointSummary</code>/<code>EndpointDescription</code>, and <code>ProducesResponseType</code> for 201, 400, 404, 409, 415 and 500.</li>
+<li>Order of checks: 415 and 413, then 400 (body and rules), then 404 (unknown person), then 409.</li>
+<li>Success is <strong>201</strong> with body <code>{id, success:true, message:"Successful", responseCode:201}</code> and <code>Location: /AstronautDuty?name=&lt;Uri.EscapeDataString(stored person name)&gt;</code>. The stored name, not the request's casing or padding, matches the <code>PersonController.PersonLocation</code> pattern.</li>
+<li>Unknown person: 404 <code>{id:null, success:false, message:"Person not found", responseCode:404}</code>. Nothing is written.</li>
+<li>Duplicate: 409 <code>{id:null, success:false, message:"A duty with this title and start date already exists for this person", responseCode:409}</code>. Nothing is written. "Duplicate" means the same person, the same title compared case-insensitively (ASCII NOCASE, as titles are matched everywhere else in the API) and the same start date (date part only, on both sides). The same title and date for another person is allowed.</li>
+<li><strong>Database unique-constraint mapping: only what exists.</strong> No index on <code>AstronautDuty</code> enforces the duplicate rule; task 009 owns that index. The only unique index this write can hit is <code>IX_AstronautDetail_PersonId</code>, when two concurrent first duties for one person race. The handler maps that <code>SqliteErrors.IsUniqueViolation</code> to 409 with the fixed message "The person's duties were changed by another request". Today that race is a 500. No other index is added or mapped.</li>
+<li>No exception text in any response. The global exception handler is a separate follow-up.</li>
+</ul>
+
+<h3>3.4 Rules 3-7: behaviour preserved, two inseparable normalisations called out</h3>
+<p>The rules block is translated line for line from Dapper to EF. For the same valid inputs the persisted rows are identical to today's:</p>
+<ul>
+<li>A first duty creates the detail with <code>CareerStartDate = start</code>.</li>
+<li>Later duties update rank and title.</li>
+<li>A <code>RETIRED</code> title sets <code>CareerEndDate</code>: to the start date on a first duty (the defect stays), and to start minus 1 on later duties.</li>
+<li>The latest duty by start date is closed at start minus 1.</li>
+<li>The new duty is open.</li>
+</ul>
+<p>Two changes cannot be separated from the fix, so I call them out:</p>
+<ol>
+<li><strong>Rank and title are trimmed before storage</strong>, with the same ASCII trim as names. The validation rule is defined on the trimmed value, so storing the untrimmed value would store something the rule never checked. The only observable difference is padded input: <code>" RETIRED "</code> now counts as retired (exact-case <code>RETIRED</code> only; case-folding stays in task 009).</li>
+<li><strong>Tie-break <code>Id DESC</code></strong> when two duties of one person share the latest start date. Today SQLite picks either row (undefined). Ties can exist only with different titles on the same day, which task 009 will reject. The tie-break makes "which duty is closed" deterministic and testable.</li>
+</ol>
+<p><strong>Transaction: no, not in this task.</strong> The single <code>SaveChangesAsync</code> already writes all rows atomically, which satisfies "multi-row writes in one transaction". Wrapping the reads in a transaction would not stop the race on SQLite: a deferred transaction takes no lock until the first write, and two writers then deadlock on the lock upgrade, so the loser gets <code>SQLITE_BUSY</code> and a 500, which is worse than today. The real fix needs <code>BEGIN IMMEDIATE</code>, busy handling, 409 mapping and the partial unique index together, which is the design task 009 already owns (its decision 5, open questions 5 and 10).</p>
+
+<h3>3.5 Main alternative rejected</h3>
+<p><strong>Keep the pre-processor and only parameterise the handler's SQL.</strong> That is the smallest diff that stops this particular payload, but it keeps two lookups, with different code and potentially different matching rules (the pre-processor is EF <code>==</code>, the handler would be Dapper), that decide "which person" separately. That is the root cause the task names. It also keeps <code>BadHttpRequestException</code>, which cannot produce 404 or 409. Rejected.</p>
+<p><strong>Second alternative rejected: a <code>personId</code> in the POST body</strong> instead of the name. Decision 6 rules it out, and it would not fix the GET.</p>
+
+<h2>4. Changes by platform</h2>
+<h3>4.1 api (<code>exercise1/api</code>)</h3>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>Controllers/AstronautDutyController.cs</code></td><td>Rewritten:
+<ul>
+<li><code>[HttpGet("")]</code> with the validated query parameter and token.</li>
+<li><code>[HttpPost("")]</code> with <code>[Consumes]</code>, <code>[RequestSizeLimit(4096)]</code>, the Swagger attributes and <code>[FromBody] CreateAstronautDutyRequest</code>. It maps the request to the command (<code>Name = request.Name ?? string.Empty</code>, the same for the other strings, <code>DutyStartDate = request.DutyStartDate.GetValueOrDefault()</code>; never <code>!</code>) and returns <code>Created(DutyLocation(result.Name), result)</code> when the result code is 201 and the name is not null, otherwise <code>this.GetResponse(result)</code>.</li>
+<li>A private <code>DutyLocation(string storedName) =&gt; "/AstronautDuty?name=" + Uri.EscapeDataString(storedName)</code>.</li>
+<li>No <code>try/catch</code>, no <code>System.Net</code>, no <code>GetPersonByName</code>.</li>
+</ul></td></tr>
+<tr><td><code>Business/Commands/CreateAstronautDuty.cs</code></td><td>
+<ul>
+<li>New <code>CreateAstronautDutyRequest</code> (sealed, nullable properties with attributes, unknown properties ignored).</li>
+<li><code>CreateAstronautDuty</code> command: <code>required string Name, Rank, DutyTitle</code> and <code>required DateTime DutyStartDate</code>, all <code>init</code> and raw.</li>
+<li>The pre-processor is deleted.</li>
+<li>The handler takes <code>(StargateContext, ILogger&lt;CreateAstronautDutyHandler&gt;)</code> and implements section 3.1 and data.md section 3. It throws an <code>ArgumentException</code> guard (with no value in the message) for an invalid name, rank, title or date, which is unreachable over HTTP, as in <code>CreatePersonHandler</code>.</li>
+<li><code>CreateAstronautDutyResult</code> (sealed) has <code>int? Id</code> and <code>[JsonIgnore] string? Name</code> (the stored person name, used for <code>Location</code> only).</li>
+<li>The handler logs with structured templates: a create logs the duty id and person id, and a rejection logs the reason and the person id when known. No name, rank or title is logged.</li>
+</ul></td></tr>
+<tr><td><code>Business/Queries/GetAstronautDutiesByName.cs</code></td><td>Static parameterised SQL (data.md section 2) with <code>CommandDefinition</code> and the token. An unknown name gives a 404 result. <code>GetAstronautDutiesByNameResult.AstronautDuties</code> becomes <code>List&lt;AstronautDutyItem&gt;</code>. The person SQL is copied, not shared with <code>GetPersonByName</code>, because task 008 deletes that type.</td></tr>
+<tr><td><code>Business/Dtos/AstronautDutyItem.cs</code> (new)</td><td><code>Id</code>, <code>PersonId</code>, <code>Rank</code>, <code>DutyTitle</code>, <code>DutyStartDate</code> (<code>DateTime</code>) and <code>DutyEndDate</code> (<code>DateTime?</code>). No navigation property.</td></tr>
+<tr><td><code>Business/Validation/InputRules.cs</code></td><td>Add <code>MinDutyDate = 1900-01-01</code>, <code>MaxDutyDate = 2100-12-31</code>, <code>IsValidDutyDate(DateTime value)</code> (compares <code>value.Date</code> inclusively) and <code>DutyDateMessage = "Use a date between 1900-01-01 and 2100-12-31."</code>.</td></tr>
+<tr><td><code>Business/Validation/ValidDutyDateAttribute.cs</code> (new)</td><td>Mirrors <code>ValidNameAttribute</code>: null is valid (pair it with <code>[Required]</code>), the message is fixed and the value is never echoed.</td></tr>
+<tr><td><code>Program.cs</code></td><td>Remove <code>cfg.AddRequestPreProcessor&lt;CreateAstronautDutyPreProcessor&gt;();</code> and the then-unused <code>using</code>. Nothing else changes.</td></tr>
+<tr><td><code>README.md</code></td><td>Changelog entries (section 6). Replace the note at line 34 (that GET returns no duties) with a <code>curl</code> example of <code>GET /AstronautDuty?name=Elena%20Vasquez</code>.</td></tr>
+</table></div>
+<h3>4.2 ui (<code>exercise1/ui</code>)</h3>
+<div class="table-wrap"><table>
+<tr><th>File</th><th>Change</th></tr>
+<tr><td><code>src/app/api/stargate-api.ts</code></td><td><code>getDuties(name: string): Observable&lt;GetDutiesOutcome&gt;</code>:
+<ul>
+<li>Sends <code>GET /api/AstronautDuty</code> with <code>new HttpParams().set('name', name)</code>. The name is sent unmodified, with no trim and no client-side validation, like <code>createPerson</code>.</li>
+<li>200 with a non-null <code>person</code> and an array <code>astronautDuties</code> emits <code>found</code>. 404 emits <code>notFound</code>. 400 emits <code>invalid</code> with its errors.</li>
+<li>A 200 without a person or duty array errors with <code>'Malformed duties response'</code>. Every other failure propagates as the <code>HttpErrorResponse</code>.</li>
+</ul>
+No <code>createDuty</code> (decision 7).</td></tr>
+<tr><td><code>src/app/api/models.ts</code></td><td>Add <code>GetDutiesOutcome</code>. Update the doc comments on <code>AstronautDuty</code>, <code>GetAstronautDutiesByNameResult</code> and <code>ValidationProblemDetails</code> (which now also covers the duty endpoints). The interface shapes do not change.</td></tr>
+<tr><td><code>src/app/api/stargate-api.spec.ts</code></td><td>New <code>describe('getDuties')</code> block, UI cases D1-D9 in <code>tests.md</code>.</td></tr>
+</table></div>
+<h3>4.3 infra, db</h3>
+<p>None. There is no schema change, no migration and no new package.</p>
+
+<h2>5. Contracts affected</h2>
+<div class="table-wrap"><table>
+<tr><th>Endpoint</th><th>Change</th><th>Breaking?</th></tr>
+<tr><td><code>GET /AstronautDuty/{name}</code></td><td>Removed. Routing gives 404 with an empty body.</td><td><span class="tag bad">BREAKING</span></td></tr>
+<tr><td><code>GET /AstronautDuty?name=</code></td><td>New. 200, 400, 404, 500. Duty items have exactly six fields.</td><td><span class="tag bad">BREAKING</span> (replaces the above)</td></tr>
+<tr><td><code>POST /AstronautDuty</code></td><td>200 becomes 201 with <code>Location</code>. Unknown person goes from 400 (stack trace) to 404. Duplicate goes from 400 to 409, and is now scoped to the person and compares dates by day. New validation: <code>dutyStartDate</code> required and bounded; rank and title follow the name rule and are trimmed. 415 for non-JSON, 413 over 4096 bytes. A missing member is still 400, with field messages instead of a parser error.</td><td><span class="tag bad">BREAKING</span></td></tr>
+<tr><td>UI <code>StargateApi.getDuties</code></td><td>Return type becomes <code>Observable&lt;GetDutiesOutcome&gt;</code>. It has no callers today.</td><td><span class="tag warn">client API change</span></td></tr>
+</table></div>
+<p>Full detail: <a href="../contracts/007/openapi.yaml">openapi.yaml</a>, <a href="../contracts/007/data.md">data.md</a>, <a href="../contracts/007/types.ts">types.ts</a>, <a href="../contracts/007/tests.md">tests.md</a>. Schema: unchanged.</p>
+
+<h2>6. Domain rules</h2>
+<div class="table-wrap"><table>
+<tr><th>Rule</th><th>How it stays true</th></tr>
+<tr><td>1. A person is identified by name</td><td>Both handlers resolve the person once, with an exact, trimmed, ASCII case-insensitive match. The unique NOCASE index <code>IX_Person_Name</code> guarantees at most one row. A fragment such as <code>ra</code> never matches. An injection payload is a literal name, so it matches only the person with exactly that name.</td></tr>
+<tr><td>2. No assignment means no astronaut rows</td><td>GET returns an empty <code>astronautDuties</code> list. Any rejected POST (400, 404 or 409) writes nothing, which tests assert with a full-table dump comparison.</td></tr>
+<tr><td>3-7</td><td>Behaviour unchanged for valid, unpadded input (section 3.4). A regression test pins the normal "second duty arrives" case and two neighbours. Defects deliberately left for task 009: a first <code>RETIRED</code> duty gets <code>CareerEndDate = start</code> instead of start minus 1; <code>RETIRED</code> is matched case-sensitively; back-dated and same-day duties are accepted, and the latest duty is closed even when it already has an end date; there is no transaction around read-decide-write; there is no unique index for the open duty or for <code>(PersonId, DutyStartDate)</code>; a later non-retired duty does not clear <code>CareerEndDate</code>; offsets in <code>dutyStartDate</code> are converted to server local time before <code>.Date</code> (section 9).</td></tr>
+</table></div>
+
+<h2>7. Tests</h2>
+<p>The full Given/When/Then list is in <a href="../contracts/007/tests.md">tests.md</a>. Highlights:</p>
+<ul>
+<li><strong>Hostile matrix over the real HTTP stack</strong> (<code>WebApplicationFactory</code> with a temp SQLite file seeded with <code>DevelopmentSeedData</code>, so Tomas Lindqvist is Id 3):
+  <ul>
+  <li>Names that pass the rule are created with <code>POST /Person</code> (201) and then receive a duty: <code>a' OR Id IS 3 OR 'a</code>, <code>a' OR 1 OR 'a</code>, <code>a' OR 'a' IS 'a</code>, <code>Tomas Lindqvist'--</code>, <code>Aoife O'Brien Jr.</code> and <code>O'Neil-Smith Jr.</code>. Each POST is 201, the duty goes to that person, and every row of every other person is byte-identical before and after. A new test helper, <code>TestDatabase.DumpExcept(personId)</code>, does the comparison.</li>
+  <li>Names that fail the rule, <code>x' OR '1'='1</code> and <code>'; DROP TABLE Person;--</code>, are 400 on <code>POST /Person</code>, on <code>POST /AstronautDuty</code> and on <code>GET /AstronautDuty</code>, with no echo and the database unchanged.</li>
+  <li>Read path: the hostile person's own duties come back. A payload-shaped unknown name is 404, never Tomas.</li>
+  <li><code>rank</code> and <code>dutyTitle</code> containing quotes are stored verbatim (trimmed); with <code>;</code> or <code>=</code> they are 400.</li>
+  </ul>
+  These tests fail on <code>280fcd9</code>: the write tests because Tomas or Mira is modified, the read tests because the route does not exist.</li>
+<li><strong>Handler tests</strong> (<code>TestDatabase</code>):
+  <ul>
+  <li>Exact, case-insensitive and padded lookups; 404 and 409 write nothing.</li>
+  <li>The duplicate check is scoped to the person, ignores the time part and ignores case.</li>
+  <li>The rules-3-7 regression pins: the second duty for Tomas on a leap-day boundary, a second duty <code>RETIRED</code> for Elena, and a first duty for Mira.</li>
+  <li>The detail-race 409 through <code>SqlOnAnotherConnectionBeforeSave</code>.</li>
+  <li>The <code>CountingCommandInterceptor</code> parameter guard.</li>
+  <li>Cancellation.</li>
+  </ul></li>
+<li><strong>Kestrel tests</strong> (<code>[Collection(RealKestrel.Collection)]</code>): the exact <code>Location</code> for <code>Aoife O'Brien Jr.</code>; 413 over 4096 bytes; Production 500 with an empty body for both GET and POST on an unmigrated database, with no secret name or SQL text in the body.</li>
+<li><strong>NullPersonGuardTests</strong> is deleted and its cases are rehomed:
+  <ul>
+  <li><code>GetDuties_UnknownName…</code> is rewritten as a 404 test.</li>
+  <li><code>GetDuties_KnownName…</code> and <code>GetDuties_PersonWithoutAstronautDetail…</code> are kept and moved to <code>GetAstronautDutiesByNameHandlerTests</code>.</li>
+  <li><code>CreateDuty_UnknownPerson…</code> is kept with the new constructor. <code>CreateDuty_KnownPerson…</code> is rewritten to expect 201.</li>
+  <li>The two <code>PreProcessor_*</code> tests are deleted, because the type is gone.</li>
+  </ul>
+  <code>ResponseShapeTests</code>: the duties shape is rewritten (no <code>person</code> member on items), and the create-result shape is kept, with <code>name</code> asserted absent.</li>
+<li><strong>Concurrency HTTP tests: not required</strong> (task 009).</li>
+<li><strong>Mutation targets</strong>, each of which must fail at least one named test:
+  <ul>
+  <li>interpolation reintroduced in either handler</li>
+  <li><code>COLLATE NOCASE</code> dropped</li>
+  <li>trim dropped</li>
+  <li>duplicate check unscoped, comparing the full datetime, or case-sensitive</li>
+  <li>404, 400 and 409 swapped</li>
+  <li>201 changed to 200</li>
+  <li><code>Location</code> unencoded, or built from the request name</li>
+  <li><code>CancellationToken</code> dropped (controller and handler)</li>
+  <li><code>try/catch</code> with <code>ex.Message</code> reintroduced</li>
+  <li>tie-break dropped</li>
+  <li>date bounds removed</li>
+  <li><code>GetPersonByName</code> sent again</li>
+  </ul>
+  The mapping is in <code>tests.md</code> section 6.</li>
+<li><strong>UI (Vitest with <code>HttpTestingController</code>)</strong>:
+  <ul>
+  <li>the query string, including an apostrophe, spaces and <code>&amp;+#</code></li>
+  <li>found with duties, and found with an empty list</li>
+  <li>404 as <code>notFound</code>, and 400 as <code>invalid</code></li>
+  <li>500 and network errors propagate</li>
+  <li>a malformed 200 errors</li>
+  <li>the name is sent unmodified</li>
+  </ul>
+  There is no screen, so loading, empty and error states are covered at the client level.</li>
+</ul>
+
+<h2>8. QA on a brand-new seeded Development database</h2>
+<ol>
+<li>Reset (<code>rm starbase.db</code>, then <code>dotnet run</code>, which migrates and seeds). <strong>Replay the 006 demonstration</strong>:
+  <ul>
+  <li><code>POST /Person {"name":"a' OR Id IS 3 OR 'a"}</code> returns 201.</li>
+  <li><code>POST /AstronautDuty {"name":"a' OR Id IS 3 OR 'a","rank":"CPT","dutyTitle":"Injected Role","dutyStartDate":"2026-03-01"}</code> returns 201, and the duty is on the new person.</li>
+  <li>A dump of Tomas Lindqvist's Person, AstronautDetail and AstronautDuty rows is identical before and after, and so are all other seeded people's rows.</li>
+  <li>Repeat with <code>a' OR 1 OR 'a</code>.</li>
+  </ul></li>
+<li><code>x' OR '1'='1</code> and <code>'; DROP TABLE Person;--</code> return 400 on both POSTs and on GET, with no echo and the table counts unchanged.</li>
+<li><code>Aoife O'Brien Jr.</code> end to end: create the person, then the duty (201, <code>Location: /AstronautDuty?name=Aoife%20O%27Brien%20Jr.</code>), then follow the Location to get 200 with the duty. Nothing returns a 500.</li>
+<li>GET for Elena Vasquez gives three duties newest first: Commander 2019-01-01 (open), Pilot, Flight Engineer. Desmond Achebe gives RETIRED, Commander, Pilot. Mira Okafor gives 200 with an empty list. <code>elena%20vasquez</code> and <code>%20ELENA%20VASQUEZ%20</code> find Elena. <code>ra</code> is 404 (it is a valid name, just unknown). <code>Nobody</code> is 404. A missing or empty name is 400, and 101 characters is 400.</li>
+<li><code>GET /AstronautDuty/Elena%20Vasquez</code> is 404 with an empty body.</li>
+<li>POST errors:
+  <ul>
+  <li>unknown person: 404</li>
+  <li>duplicate: 409</li>
+  <li>the same title and date for another person: 201</li>
+  <li>a missing <code>dutyStartDate</code>: 400</li>
+  <li><code>0001-01-01</code>: 400</li>
+  <li><code>text/plain</code>: 415</li>
+  <li>a 4097-byte body: 413</li>
+  <li>malformed JSON: 400 with no parser internals</li>
+  </ul></li>
+<li>Production (<code>ASPNETCORE_ENVIRONMENT=Production</code>, unmigrated database): GET and POST return 500 with an empty body.</li>
+<li>Regression of rules 3-7 in the normal case: post Commander/MAJ/2024-03-01 for Tomas. His Pilot duty ends on 2024-02-29, the detail is MAJ/Commander, <code>CareerStartDate</code> is 2021-06-14 and <code>CareerEndDate</code> is null.</li>
+<li>Swagger: <code>GET /AstronautDuty</code> lists <code>name</code> as a required query parameter, <code>/AstronautDuty/{name}</code> is absent, and POST lists 201, 400, 404, 409 and 415. A source grep for <code>$"SELECT</code>, <code>$"""</code> and <code>FromSqlRaw</code> in the two files finds nothing.</li>
+<li>UI: <code>npm test -- --watch=false</code> and <code>npm run build</code> pass. Through the proxy, <code>/api/AstronautDuty?name=Elena%20Vasquez</code> returns the duties.</li>
+</ol>
+
+<h2>9. Risks and rollout</h2>
+<ul>
+<li><strong>Data impact:</strong> none. There is no migration and existing rows are untouched. A Development database used for the 006 QA may already contain the injected rows from that demonstration; QA must start from a fresh database.</li>
+<li><strong>Backward compatibility:</strong> all breaks are listed in section 5. The API is pre-release and its only consumer, the UI, changes in the same PR. The external feed must send <code>dutyStartDate</code>, expect 201, and stop relying on cross-person duplicate blocking.</li>
+<li><strong>Date offsets (verified by probe):</strong> System.Text.Json converts a value with a non-zero offset to server local time. In the UTC container, <code>2024-01-01T23:30:00-05:00</code> becomes 2024-01-02. This is unchanged from today. The contract tells clients to send <code>YYYY-MM-DD</code>; date-only semantics are in task 009's scope.</li>
+<li><strong>Character rule on titles:</strong> a title such as <code>Commander/Pilot</code> or <code>EVA &amp; Robotics</code> is now 400. This is accepted by the acceptance criteria ("the same shared length and character rule"), and all seeded titles and ranks pass.</li>
+<li><strong>Rollback:</strong> revert the PR. Nothing in the database depends on the new code.</li>
+<li><strong>Unverified items</strong> (cheap checks, done by api-dev in the first test run):
+  <ul>
+  <li>U1: <code>[Required, ValidName]</code> on a <code>[FromQuery]</code> parameter gives the key <code>name</code>, the message "The name field is required." (lowercase, from the parameter name), and for whitespace-only input the Required message before the name-rule message. Check: tests G6/G7. If the order differs, the contract's order statement is the defect to report.</li>
+  <li>U2: EF Core 10 SQLite translates <code>d.DutyStartDate.Date == start</code> and <code>EF.Functions.Collate(d.DutyTitle, "NOCASE")</code>. Check: test CH9 seeds a duty at 10:00 and expects 409.</li>
+  <li>U3: Swashbuckle marks the <code>name</code> query parameter <code>required: true</code>. Check: test A20.</li>
+  <li>U4: the routing 404 for the removed path has an empty body in both TestServer and Kestrel. Check: test G12.</li>
+  </ul></li>
+</ul>
+
+<h2>10. Subtasks</h2>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Platform</th><th>Work</th><th>Depends on</th></tr>
+<tr><td>A</td><td>api</td><td>Sections 3 and 4.1: security fix, GET, POST, validation, Program.cs, README, and every API test in tests.md (handler, HTTP, Kestrel, shape, controller). One api-dev, in commit order: (1) security fix with the failing hostile tests made green; (2) GET; (3) POST hardening; (4) README.</td><td>Contracts approved</td></tr>
+<tr><td>B</td><td>ui</td><td>Section 4.2 and the UI tests in tests.md.</td><td>Contracts approved; runs in parallel with A</td></tr>
+<tr><td>C</td><td>lead / QA</td><td>Integrate A and B, run both test suites, then QA as in section 8.</td><td>A, B</td></tr>
+</table></div>
+<p><strong>Dependency facts:</strong> this task depends on tasks 005 and 006, both <code>done</code> on <code>main</code>.</p>
+<p>Task 008 depends on this task. After 007 merges, <code>AstronautDutyController</code> no longer references <code>GetPersonByName</code>. 008 then deletes <code>GetPersonByName</code>, <code>GetPersonByNameResult</code>, <code>GET /Person/{name}</code>, the UI's <code>getPerson</code> and the <code>ResponseShapeTests</code> cases for <code>GetPersonByNameResult</code>. This task leaves all of those untouched.</p>
+<p>Task 009 depends on this task. It inherits a handler that resolves the person once, uses EF only, honours the token, returns 404/409/201, scopes the duplicate check to the person by date and case-insensitive title, and maps the detail unique violation to 409. 009 owns:</p>
+<ul>
+<li>rules 3-7 enforcement, including the defects listed in section 6</li>
+<li>the transaction and the <code>BEGIN IMMEDIATE</code> design</li>
+<li>the open-duty and <code>(PersonId, DutyStartDate)</code> indexes and their 409 mapping</li>
+<li>case-insensitive <code>RETIRED</code></li>
+<li>date-only parsing</li>
+<li>the concurrency tests</li>
+</ul>
+<p>009's text says "Titles are also not trimmed"; after 007 they are trimmed (section 3.4), so 009 should drop that point.</p>
+
+<h2>11. Contracts</h2>
+<ul>
+<li><a href="../contracts/007/contract.html">contract.html</a>: one-page summary for approval, with the breaking changes flagged</li>
+<li><a href="../contracts/007/openapi.yaml">openapi.yaml</a>: <code>GET /AstronautDuty</code>, <code>POST /AstronautDuty</code>, the removed path, schemas and error shapes</li>
+<li><a href="../contracts/007/data.md">data.md</a>: no schema change, the exact SQL and LINQ, the handler algorithm, rule enforcement</li>
+<li><a href="../contracts/007/types.ts">types.ts</a>: the exact UI types</li>
+<li><a href="../contracts/007/tests.md">tests.md</a>: Given/When/Then per platform, the hostile matrix, the mutation map</li>
+</ul>
+
+<h2>12. Questions for the user</h2>
+<ol>
+<li><strong>Bounds for <code>dutyStartDate</code>: 1900-01-01 to 2100-12-31 inclusive?</strong> Recommended: yes. A lower bound is required anyway, because <code>0001-01-01</code> crashes the start-minus-1 arithmetic with a 500 today. The upper bound catches typos without inventing a "no future duties" rule (task 009, question 7). Alternative: lower bound only.</li>
+<li><strong>Trim <code>rank</code> and <code>dutyTitle</code> before storage</strong>, so a padded <code>" RETIRED "</code> now counts as retired? Recommended: yes. It is the only consistent reading of "validated by the shared rule", and task 009 decision 3 trims titles too. Alternative: reject surrounding whitespace with 400.</li>
+<li><strong>Duplicate check compares titles ignoring ASCII case</strong> (<code>Pilot</code> and <code>pilot</code> on the same day for the same person is 409). Recommended: yes, it is consistent with every other title match in the API. Alternative: an exact-case comparison, which keeps today's comparison.</li>
+</ol>
+</main>
+</body>
+</html>

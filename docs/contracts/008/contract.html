@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Contract 008: One GetPeople query object, GET /Person/{name} removed (revision 1)</title>
+<title>Contract 008: One GetPeople query object, GET /Person/{name} removed (revision 1, amendment 1)</title>
 <style>
   :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
   @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
@@ -16,9 +16,9 @@
   .meta { color: var(--muted); font-size:.92rem; }
   code { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background: var(--code); padding:.08em .3em; border-radius:4px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
-  .bad { border-left:5px solid var(--bad); } .ok { border-left:5px solid var(--ok); } .warn { border-left:5px solid var(--warn); }
+  .bad { border-left:5px solid var(--bad); } .ok { border-left:5px solid var(--ok); } .warn { border-left:5px solid var(--warn); } .amend { border-left:5px solid var(--accent); }
   .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
-  .tag.bad { color:var(--bad); } .tag.ok { color:var(--ok); } .tag.warn { color:var(--warn); }
+  .tag.bad { color:var(--bad); } .tag.ok { color:var(--ok); } .tag.warn { color:var(--warn); } .tag.amend { color:var(--accent); }
   .table-wrap { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; font-size:.93rem; }
   th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
@@ -27,14 +27,27 @@
 </head>
 <body>
 <main>
-<p class="meta">Task 008 &middot; contract revision 1 &middot; baseline <code>main</code> e950203 &middot; status: awaiting approval together with the <a href="../../plans/008-consolidate-get-people-query-exact-name.html">plan</a></p>
+<p class="meta">Task 008 &middot; contract revision 1, <strong>amendment 1</strong> &middot; baseline <code>main</code> e950203 &middot; revision 1 approved with the <a href="../../plans/008-consolidate-get-people-query-exact-name.html">plan</a>; amendment 1 awaiting re-approval</p>
 <h1>Contract 008: One GetPeople query object, <code>GET /Person/{name}</code> removed</h1>
 <p>Files: <a href="openapi.yaml">openapi.yaml</a> &middot; <a href="data.md">data.md</a> &middot; <a href="types.ts">types.ts</a> &middot; <a href="tests.md">tests.md</a></p>
 
+<div class="card amend">
+<p><span class="tag amend">AMENDMENT 1</span> <strong>Written after the merge, from the merged code and tests. API behaviour, wire shapes and types are unchanged. No new breaking change.</strong></p>
+<ol>
+<li><strong>UI grep gate (tests.md section 5).</strong> The old gate (<code>grep "getPerson\b\|GetPersonByNameResult" exercise1/ui/src</code> prints nothing) could never pass, because test UI-3 must contain the literal <code>getPerson</code>. New gate: <code>GetPersonByNameResult</code> appears nowhere under <code>exercise1/ui/src</code>, and <code>getPerson</code> appears only in <code>*.spec.ts</code> (<code>grep -rn --exclude='*.spec.ts' "getPerson\b" exercise1/ui/src</code> prints nothing).</li>
+<li><strong>Two existing tests were missing from the rewrite list (tests.md section 1).</strong> Both called the removed route and were repaired. <code>PersonUpdateHttpTests.P15</code> now expects 405 from <code>GET /Person/Mira%20Okafor</code>. <code>PersonResolutionPreIndexHttpTests.GetDuties_AndGetPerson_ResolveTheSamePerson</code> is renamed <code>GetDuties_PicksTheExactCaseRow_WhileGetPeopleListsEveryCaseVariant</code>. It now asserts that <code>GET /Person?name=</code>, on a database without the unique index, returns both case variants (ids 4 and 9).</li>
+<li><strong>HEAD and PUT on the old path (tests.md section 6, data.md section 3).</strong> On BASE, <code>HEAD /Person/{x}</code> was already 405 with <code>Allow: GET, PUT</code>, not 200/404/400 as the before-table said. On this branch it is 405 with <code>Allow: PUT</code>. <code>PUT /Person/abc</code> with no body is 415 on both builds. Test Q1p sends a JSON body, which gives 400.</li>
+<li><strong>Test set (tests.md sections 2, 3 and new section 7).</strong> The lists now match the merged tests, including the review-round additions Q5g-Q5k: <code>?query=&amp;name=%25</code>, <code>?query[0]=x</code>, <code>?query.foo=1</code>, <code>?QUERY=x</code>, <code>?query=x&amp;Name=%25</code>, <code>?query.rank=MAJ&amp;name=%25</code>, <code>?rank=%25&amp;query.rank=MAJ</code>, <code>?query.name=%25</code> (200, all six: not an alias), indexed <code>name[0]</code>, an empty first repeated value, and odd encodings (<code>%00</code>, <code>%FF</code>, comma-joined, repeated with an invalid first value). Also listed: Q3k <code>ra</code>, Q3m, the Q7 injection row and shape test, and the Q8 4000-character test, which asserts 400. Section 7 adds the map of the 10 mutations api-dev ran.</li>
+<li><strong>Known, deliberately accepted</strong> (section below): non-ASCII-whitespace-only values mean "no filter", and the Q8 loop accepts 200 or 400.</li>
+<li><strong>Stale status text.</strong> Plan questions Q1-Q3 were answered when revision 1 was approved: 405 accepted, single message accepted, and <code>CLAUDE.md</code> updated. The "pending" wording is removed.</li>
+</ol>
+<p>Files changed by this amendment: <code>contract.html</code>, <code>tests.md</code>, <code>data.md</code> and the plan. <code>openapi.yaml</code> and <code>types.ts</code> are unchanged and still match the code.</p>
+</div>
+
 <h2>Breaking changes</h2>
 <div class="card bad">
-<p><span class="tag bad">BREAKING</span> <strong><code>GET /Person/{name}</code> is removed.</strong> Any GET or HEAD on <code>/Person/{x}</code> now gets <strong>405 Method Not Allowed</strong>, header <code>Allow: PUT</code>, empty body. That path belongs to <code>PUT /Person/{personId}</code>, so routing answers "method not allowed", not 404. No handler runs and no person data is returned. Use <code>GET /Person?name=&lt;name&gt;</code>. An unknown person is <strong>200</strong> with <code>people: []</code> (it was 404).</p>
-<p><em>Pending your answer to plan Q1.</em> The task asked for a 404. The 405 is what the framework does without changing PUT. If you choose the PUT route-constraint alternative instead, only the Q1 rows, this card and the openapi note change.</p>
+<p><span class="tag bad">BREAKING</span> <strong><code>GET /Person/{name}</code> is removed.</strong> A GET on <code>/Person/{x}</code> now gets <strong>405 Method Not Allowed</strong> with header <code>Allow: PUT</code> and an empty body. That path belongs to <code>PUT /Person/{personId}</code>, so routing answers "method not allowed", not 404. No handler runs and no person data is returned. Use <code>GET /Person?name=&lt;name&gt;</code>. An unknown person is <strong>200</strong> with <code>people: []</code> (it was 404). A HEAD on the same path was already 405 before this task. Only its <code>Allow</code> value changes, from <code>GET, PUT</code> to <code>PUT</code>.</p>
+<p><em>Accepted at approval (plan Q1):</em> 405 rather than the task's original 404, with no route constraint added to PUT.</p>
 </div>
 <div class="card bad">
 <p><span class="tag bad">BREAKING (UI internal)</span> <code>StargateApi.getPerson</code> and <code>GetPersonByNameResult</code> are removed. No component used them.</p>
@@ -46,8 +59,17 @@
 <li><strong><code>GET /Person</code> parameters and response shapes are unchanged.</strong> The parameters are <code>name</code>, <code>rank</code> and <code>dutyTitle</code>, all optional, case-insensitive exact, combined with AND. The 200 response is <code>{ people[], success, message, responseCode }</code>, with <code>""</code> rank and title for unassigned people. The 400 response is <code>ValidationProblemDetails</code> keyed <code>name</code>/<code>rank</code>/<code>dutyTitle</code>, and the input is never echoed.</li>
 <li><strong>Trimming matches the writes.</strong> Surrounding ASCII whitespace (tab, LF, VT, FF, CR, space) is removed before validation. A leading or trailing control character, or padding beyond 100 characters, now returns 200 instead of 400. No input that was accepted before is now rejected.</li>
 <li><strong>Over-long values</strong> return 400 with exactly one message, the shared name-rule message (it was "The field <em>x</em> must be a string with a maximum length of 100.").</li>
-<li><strong>Binding</strong> (unchanged, now written down): parameter names are case-insensitive, a repeated parameter uses its first value, and unknown parameters are ignored. <code>query</code> and <code>query.name</code> are not aliases and never switch a filter off.</li>
+<li><strong>Binding</strong> (unchanged, now written down): parameter names are case-insensitive, a repeated parameter uses its first value, and unknown parameters are ignored. <code>query</code>, <code>query.name</code>, <code>query.*</code>, <code>query[0]</code> and indexed <code>name[0]</code> are not aliases and never switch a filter or its validation off.</li>
 <li><strong>Swagger</strong>: <code>/Person</code> keeps <code>maxLength</code> and <code>pattern</code> and loses only <code>minLength: 0</code>. <code>GET /AstronautDuty</code>'s <code>name</code> gains <code>maxLength</code> and <code>pattern</code>. <code>/Person/{name}</code> and <code>GetPersonByNameResult</code> are gone.</li>
+<li><strong><code>PUT /Person/{personId}</code> is unchanged</strong>: <code>PUT /Person/abc</code> is 400 with a JSON body and 415 with no body, the same as before.</li>
+</ul>
+</div>
+
+<h2>Known, deliberately accepted (Amendment 1)</h2>
+<div class="card warn">
+<ul>
+<li><strong>A value made only of non-ASCII whitespace means "no filter".</strong> <code>?name=%C2%A0</code> (NBSP) or <code>?rank=%E3%80%80</code> binds to null, because MVC uses Unicode-aware <code>IsNullOrWhiteSpace</code>. The response is 200 with everyone (test Q6k). This contradicts the <code>InputRules</code> summary comment (<code>InputRules.cs:10</code>), which says non-ASCII whitespace is always invalid. That holds only when the value has other characters too (<code>%C2%A0Elena%20Vasquez</code> is 400, Q6j). It is documented and tested as intended: the result is the same public list as <code>GET /Person</code>, nothing extra is exposed, and BASE behaved the same way.</li>
+<li><strong>The Q8 hostile-value loop accepts either 200 (empty list) or 400</strong> for each row, by design. It asserts "never a 500, never wider results, never a write", not which side of the name rule each string falls on. The exact 400s are pinned in Q7, and the 4000-character value has its own test asserting 400.</li>
 </ul>
 </div>
 
@@ -61,12 +83,12 @@
 
 <h2>Domain rules</h2>
 <ul>
-<li><strong>Rule 1:</strong> one exact, trimmed, case-insensitive lookup by name (<code>GET /Person?name=</code>), backed by the unique NOCASE index.</li>
+<li><strong>Rule 1:</strong> one exact, trimmed, case-insensitive lookup by name (<code>GET /Person?name=</code>), backed by the unique NOCASE index. On a database that predates the index and still holds case variants, the list shows every variant.</li>
 <li><strong>Rule 2:</strong> SQL is unchanged. Unassigned people are matched by <code>name</code> alone and never by <code>rank</code> or <code>dutyTitle</code>.</li>
 </ul>
 
 <h2>Security note</h2>
-<p>When the object is bound with a plain <code>[FromQuery] GetPeople query</code>, <code>?query=x&amp;name=%25</code> returns 200 with every person: validation and filters are skipped (observed in planning). The contract requires <code>Name = ""</code> on the action parameter, and tests Q5a-Q5f lock that in.</p>
+<p>When the object is bound with a plain <code>[FromQuery] GetPeople query</code>, <code>?query=x&amp;name=%25</code> returns 200 with every person: validation and filters are skipped (observed in planning). The contract requires <code>Name = ""</code> on the action parameter. Tests Q5a-Q5k lock that in, across every prefix-like shape listed in amendment item 4. Mutation M1 (dropping <code>Name = ""</code>) turns them red.</p>
 </main>
 </body>
 </html>

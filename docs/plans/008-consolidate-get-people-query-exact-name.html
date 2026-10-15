@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Plan 008: One GetPeople query object, remove GET /Person/{name}</title>
+<title>Plan 008: One GetPeople query object, remove GET /Person/{name} (amendment 1)</title>
 <style>
   :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
   @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
@@ -22,7 +22,7 @@
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
   .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
   .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
-  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); } .tag.amend { color:var(--accent); }
   .table-wrap { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; font-size:.93rem; }
   th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
@@ -31,9 +31,21 @@
 </head>
 <body>
 <main>
-<p class="meta">Task 008 &middot; plan revision 1 &middot; baseline <code>main</code> at <code>e950203</code> (tasks 001-007 merged) &middot; branch <code>task/008-consolidate-get-people-query-exact-name</code> &middot; status: awaiting approval (plan and contracts together)</p>
+<p class="meta">Task 008 &middot; plan revision 1, <strong>amendment 1</strong> &middot; baseline <code>main</code> at <code>e950203</code> (tasks 001-007 merged) &middot; branch <code>task/008-consolidate-get-people-query-exact-name</code> &middot; status: revision 1 approved and implemented (merged on the branch); amendment 1 awaiting re-approval together with the contracts</p>
 <h1>Plan 008: One GetPeople query object, remove <code>GET /Person/{name}</code></h1>
 <p class="meta">Contracts: <a href="../contracts/008/contract.html">docs/contracts/008/contract.html</a> (with <code>openapi.yaml</code>, <code>data.md</code>, <code>types.ts</code>, <code>tests.md</code>).</p>
+
+<div class="card amend">
+<p><span class="tag amend">AMENDMENT 1</span> <strong>Written after the merge. It fixes text that the merged code and tests showed to be wrong or incomplete. Approach, API behaviour, wire shapes and types are unchanged.</strong></p>
+<ol>
+<li><strong>UI grep gate.</strong> "Grep finds no <code>getPerson</code>" could never pass, because test UI-3 must contain the literal <code>getPerson</code>. Now: no <code>GetPersonByNameResult</code> anywhere under <code>exercise1/ui/src</code>, and <code>getPerson</code> only in <code>*.spec.ts</code> (<code>grep -rn --exclude='*.spec.ts' "getPerson\b" exercise1/ui/src</code> prints nothing). Updated in QA step 4 and tests.md section 5.</li>
+<li><strong>Two existing tests were missing from the rewrite list.</strong> <code>PersonUpdateHttpTests.P15</code> now expects 405 from <code>GET /Person/Mira%20Okafor</code>. <code>PersonResolutionPreIndexHttpTests.GetDuties_AndGetPerson_ResolveTheSamePerson</code> is renamed <code>GetDuties_PicksTheExactCaseRow_WhileGetPeopleListsEveryCaseVariant</code>, and its <code>GET /Person?name=</code> call on a database without the unique index returns both case variants (ids 4 and 9). Both are added under "Rewritten" and removed from "Kept unchanged".</li>
+<li><strong>HEAD and PUT on the old path.</strong> On BASE, <code>HEAD /Person/{x}</code> was already 405 with <code>Allow: GET, PUT</code>, because <code>[HttpGet]</code> never matched HEAD. The contract's before-table wrongly said 200/404/400. On HEAD it is 405 with <code>Allow: PUT</code>. <code>PUT /Person/abc</code> with no body is 415 on both builds; Q1p sends a JSON body and gets 400.</li>
+<li><strong>Test inventory and mutation map.</strong> The "Added" list now shows the tests that exist, including the review-round additions Q5g-Q5k, Q3m, the Q7 injection row and shape test, and the Q8 4000-character test. The "Mutation targets" list is replaced by the table of the 10 mutations api-dev ran.</li>
+<li><strong>Known, deliberately accepted.</strong> A value made only of non-ASCII whitespace (<code>?name=%C2%A0</code>) binds to null and means "no filter" (200, everyone; Q6k). This contradicts the <code>InputRules</code> summary comment (<code>InputRules.cs:10</code>). The Q8 loop accepts 200 or 400 by design.</li>
+<li><strong>Other stale text.</strong> UI-2 was described here as "<code>listPeople()</code> sends no params", but the contract and the spec use <code>listPeople({ name: 'Nobody' })</code>, an empty list with no error. The prefix tests are Q5a-Q5k, not Q5a-Q5e. Questions Q1-Q3 were answered at approval. The "unverified items" are now covered by merged tests.</li>
+</ol>
+</div>
 
 <h2>Summary and verdict</h2>
 <p><strong>Verdict: <span class="tag warn">multi</span></strong> (api + ui). The work spans two platforms, and the two halves need nothing from each other except a fixed agreement: <code>PersonFilters</code> is <code>{ name?, rank?, dutyTitle? }</code> and <code>GET /Person/{name}</code> no longer exists. The UI part is small (remove <code>getPerson</code>, <code>GetPersonByNameResult</code> and their tests, and update two doc comments). It still gets its own developer, as in 006 and 007, so both halves can run in parallel against the contract.</p>
@@ -46,20 +58,20 @@
 </ol>
 
 <div class="card bad">
-<p><strong>One assumption in the task is wrong, and it needs your decision (Q1).</strong> After the removal, <code>GET /Person/{anything}</code> does <em>not</em> return 404. It returns <strong>405 Method Not Allowed</strong> with header <code>Allow: PUT</code> and an empty body. The reason is that the path still matches the template of <code>PUT /Person/{personId}</code> (<code>PersonController.cs:72</code>), so endpoint routing reports "path known, method not allowed". I observed this on Kestrel (probe below) for <code>/Person/Ada</code>, <code>/Person/123</code>, <code>/Person/Elena%20Vasquez</code> and <code>/Person/%20</code>, and for <code>HEAD</code> and <code>DELETE</code>. Task 007's removed route returned 404 only because <code>/AstronautDuty/{x}</code> matches no other template.</p>
-<p>The plan and contract fix the status at <strong>405</strong>. That still meets everything else the task requires of the removed route: no handler runs, no person data, no redirect, no 410, and no deprecation period. A routing 404 is possible only by changing <code>PUT</code> (see Q1), so I recommend 405.</p>
+<p><strong>One assumption in the task was wrong (decided at approval: 405 accepted).</strong> After the removal, <code>GET /Person/{anything}</code> does <em>not</em> return 404. It returns <strong>405 Method Not Allowed</strong> with header <code>Allow: PUT</code> and an empty body. The reason is that the path still matches the template of <code>PUT /Person/{personId}</code> (<code>PersonController.cs:72</code> on base), so endpoint routing reports "path known, method not allowed". I observed this on Kestrel (probe below) for <code>/Person/Ada</code>, <code>/Person/123</code>, <code>/Person/Elena%20Vasquez</code> and <code>/Person/%20</code>, and for <code>HEAD</code> and <code>DELETE</code>. Task 007's removed route returned 404 only because <code>/AstronautDuty/{x}</code> matches no other template. (Amendment 1: HEAD was already 405 on base, with <code>Allow: GET, PUT</code>. Only its <code>Allow</code> value changes.)</p>
+<p>The plan and contract fix the status at <strong>405</strong>. That still meets everything else the task requires of the removed route: no handler runs, no person data, no redirect, no 410, and no deprecation period. A routing 404 would have required changing <code>PUT</code>.</p>
 </div>
 
 <div class="card warn">
-<p><strong>A second finding the task did not anticipate (fixed in the plan).</strong> If the query object is bound with a plain <code>[FromQuery] GetPeople query</code>, MVC's prefix fallback creates a filter bypass. When any query key equals the C# parameter name, MVC switches to the <code>query.</code> prefix. So <code>/Person?query=x&amp;name=Elena%20Vasquez</code> returned <strong>all six people</strong>, and <code>/Person?query=x&amp;name=%25</code> returned <strong>200 with everyone instead of 400</strong>, because validation was skipped. It also made <code>?query.name=</code> a working alias. Pinning the prefix with <code>[FromQuery(Name = "")]</code> on the action parameter removes all three effects. I verified this in the probe, and tests Q5a-Q5e lock it in.</p>
+<p><strong>A second finding the task did not anticipate (fixed in the plan).</strong> If the query object is bound with a plain <code>[FromQuery] GetPeople query</code>, MVC's prefix fallback creates a filter bypass. When any query key equals the C# parameter name, MVC switches to the <code>query.</code> prefix. So <code>/Person?query=x&amp;name=Elena%20Vasquez</code> returned <strong>all six people</strong>, and <code>/Person?query=x&amp;name=%25</code> returned <strong>200 with everyone instead of 400</strong>, because validation was skipped. It also made <code>?query.name=</code> a working alias. Pinning the prefix with <code>[FromQuery(Name = "")]</code> on the action parameter removes all three effects. I verified this in the probe, and tests Q5a-Q5k lock it in (Amendment 1: Q5g-Q5k were added in review).</p>
 </div>
 
 <h2>Current behaviour (main e950203)</h2>
 <div class="table-wrap"><table>
 <tr><th>Where</th><th>What</th></tr>
 <tr><td><code>api/Controllers/PersonController.cs:22-49</code></td><td><code>GET /Person</code> takes three loose <code>[FromQuery]</code> parameters (<code>:32-39</code>). Each carries <code>[StringLength(100)]</code>, <code>[RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = AllowedCharactersMessage)]</code> and a <code>[Description]</code>. The action copies them into a new <code>GetPeople</code> (<code>:41-46</code>). Those attributes validate the <strong>raw</strong> (untrimmed) value.</td></tr>
-<tr><td><code>api/Controllers/PersonController.cs:51-70</code></td><td><code>GET /Person/{name}</code> sends <code>GetPersonByName</code>. Returns 200, 400 or 404 (<code>GetPersonByNameResult</code>).</td></tr>
-<tr><td><code>api/Controllers/PersonController.cs:72</code></td><td><code>[HttpPut("{personId}")]</code>: the template <code>/Person/{personId}</code> has no route constraint. This is what turns a GET on the removed path into a 405.</td></tr>
+<tr><td><code>api/Controllers/PersonController.cs:51-70</code></td><td><code>GET /Person/{name}</code> (<code>[HttpGet("{name}")]</code>, no <code>[HttpHead]</code>) sends <code>GetPersonByName</code>. Returns 200, 400 or 404 (<code>GetPersonByNameResult</code>). HEAD on the path was already 405 with <code>Allow: GET, PUT</code>.</td></tr>
+<tr><td><code>api/Controllers/PersonController.cs:72</code></td><td><code>[HttpPut("{personId}")]</code>: the template <code>/Person/{personId}</code> has no route constraint. This is what turns a GET on the removed path into a 405. The action has <code>[Consumes("application/json")]</code>, so a PUT with no body is 415.</td></tr>
 <tr><td><code>api/Business/Queries/GetPeople.cs:10-20</code></td><td><code>GetPeople</code> has <code>Name</code>, <code>Rank</code> and <code>DutyTitle</code> (<code>string?</code>, <code>init</code>) with no attributes. The handler (<code>:27-34</code> SQL, <code>:60</code> <code>Normalize</code>) maps null/whitespace to "no filter", trims with <code>InputRules.Normalize</code>, and runs an exact <code>= @x COLLATE NOCASE</code> match. There is no LIKE (task 006 removed it; regression check only).</td></tr>
 <tr><td><code>api/Business/Queries/GetPersonByName.cs:1-61</code></td><td>Request, handler (exact NOCASE, exact-case first, then lowest Id, <code>LIMIT 1</code>, 404 "Person not found") and <code>GetPersonByNameResult { Person }</code>. MediatR registration is assembly scanning (<code>Program.cs:32-35</code>), so there is no DI line to remove.</td></tr>
 <tr><td><code>api/Business/Validation/ValidNameAttribute.cs:16-17</code></td><td>Write rule: <code>null</code> is valid, otherwise <code>IsValidName(Normalize(text))</code>, with message <code>AllowedCharactersMessage</code>. Used by <code>POST/PUT /Person</code> and both <code>/AstronautDuty</code> actions.</td></tr>
@@ -119,6 +131,9 @@ public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeopl
 <tr><td>Empty, spaces only, tab only, NBSP only, parameter absent</td><td>200, no filter</td><td>200, no filter (unchanged)</td></tr>
 </table></div>
 <p>The 400 body shape is unchanged: <code>ValidationProblemDetails</code> with <code>type</code>, <code>title</code>, <code>status</code>, <code>errors</code> and <code>traceId</code>; keys <code>name</code>/<code>rank</code>/<code>dutyTitle</code>; the value is never echoed. These are relaxations, so not breaking for clients, but the changelog records them.</p>
+<div class="card warn">
+<p><strong>Known, deliberately accepted (Amendment 1).</strong> The "NBSP only" row above means a value made only of non-ASCII whitespace (<code>?name=%C2%A0</code>, <code>?rank=%E3%80%80</code>) is "no filter": 200 with everyone (test Q6k). The <code>InputRules</code> summary comment (<code>InputRules.cs:10</code>) says non-ASCII whitespace is always invalid. That holds only when the value has other characters too (<code>%C2%A0Elena%20Vasquez</code> is 400, Q6j). The result is the same public list as <code>GET /Person</code> and the same as base, so it is documented and tested as intended, not changed.</p>
+</div>
 
 <h3>3. Swagger keeps maxLength and pattern</h3>
 <p>Swashbuckle cannot read <code>[ValidName]</code>. A small <code>ValidNameParameterFilter : IParameterFilter</code> (new file <code>api/Swagger/ValidNameParameterFilter.cs</code>, registered in <code>Program.cs:25</code> as <code>AddSwaggerGen(o =&gt; o.ParameterFilter&lt;ValidNameParameterFilter&gt;())</code>) sets <code>maxLength = InputRules.MaxLength</code> and <code>pattern = InputRules.AllowedCharactersPattern</code> on any parameter whose property or parameter carries <code>[ValidName]</code>. The probe version compiled under Swashbuckle 10.3 / Microsoft.OpenApi 2.x, with the signature <code>Apply(IOpenApiParameter, ParameterFilterContext)</code> and a cast of <code>parameter.Schema</code> to <code>OpenApiSchema</code>. Effects: <code>/Person</code> parameters as before minus <code>minLength: 0</code>; <code>/AstronautDuty</code> GET <code>name</code> gains <code>maxLength</code>/<code>pattern</code>. Request-body schemas are unchanged.</p>
@@ -130,7 +145,7 @@ public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeopl
 <ul>
 <li><strong>Keep <code>[StringLength]</code> + <code>[RegularExpression]</code> on the properties</strong> (Swagger byte-identical, no filter). Rejected because those attributes validate the raw value, so GET would keep disagreeing with the writes, which the task explicitly asks to fix.</li>
 <li><strong>A separate <code>PersonQuery</code> DTO wrapped into <code>GetPeople</code></strong>. Rejected because the attributes sit fine on <code>GetPeople</code>, and the Decision says split only if they cannot.</li>
-<li><strong>Route constraint <code>{personId:int}</code> on PUT</strong> to get a 404 for <code>GET /Person/Ada</code>. Rejected as the default (Q1): <code>GET /Person/123</code> would still be 405, and <code>PUT /Person/abc</code> would change from 400 (binding error, task 002) to 404. That is a behaviour change to an endpoint outside this task's scope.</li>
+<li><strong>Route constraint <code>{personId:int}</code> on PUT</strong> to get a 404 for <code>GET /Person/Ada</code>. Rejected (and confirmed at approval): <code>GET /Person/123</code> would still be 405, and <code>PUT /Person/abc</code> (with a JSON body) would change from 400 (binding error, task 002) to 404. That is a behaviour change to an endpoint outside this task's scope.</li>
 <li><strong>A catch-all <code>GET /Person/{*rest}</code> returning 404</strong>. Rejected because it keeps code for a route that should not exist, and a handler would run.</li>
 </ul>
 
@@ -159,9 +174,10 @@ public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeopl
 <h2>Contracts affected</h2>
 <div class="table-wrap"><table>
 <tr><th>Endpoint</th><th>Change</th><th>Breaking?</th></tr>
-<tr><td><code>GET /Person/{name}</code></td><td>Removed. Any GET/HEAD on <code>/Person/{x}</code> returns 405, <code>Allow: PUT</code>, empty body.</td><td><span class="tag bad">breaking</span></td></tr>
+<tr><td><code>GET /Person/{name}</code></td><td>Removed. A GET on <code>/Person/{x}</code> returns 405, <code>Allow: PUT</code>, empty body. HEAD was already 405 on base; only its <code>Allow</code> value changes (<code>GET, PUT</code> to <code>PUT</code>).</td><td><span class="tag bad">breaking</span></td></tr>
 <tr><td><code>GET /Person</code></td><td>Same parameters, same 200/400 shapes. Trim before validation (some 400s become 200). Over-length 400 message text changes. Swagger loses <code>minLength: 0</code>.</td><td><span class="tag ok">not breaking</span> (relaxation; message text is display-only per <code>models.ts</code>)</td></tr>
 <tr><td><code>GET /AstronautDuty</code></td><td>Swagger only: <code>name</code> gains <code>maxLength</code> and <code>pattern</code>. Behaviour unchanged.</td><td><span class="tag ok">not breaking</span></td></tr>
+<tr><td><code>PUT /Person/{personId}</code></td><td>Unchanged: <code>PUT /Person/abc</code> is 400 with a JSON body and 415 with no body, on both builds.</td><td><span class="tag ok">not breaking</span></td></tr>
 <tr><td>UI <code>StargateApi.getPerson</code>, <code>GetPersonByNameResult</code></td><td>Removed. No in-repo caller.</td><td><span class="tag bad">breaking</span> (internal API surface)</td></tr>
 <tr><td>Schema</td><td>None.</td><td>-</td></tr>
 </table></div>
@@ -169,13 +185,13 @@ public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeopl
 
 <h2>Domain rules</h2>
 <ul>
-<li><strong>Rule 1 (name identifies a person).</strong> The only lookup by name is <code>GET /Person?name=</code>: exact, trimmed, ASCII case-insensitive, backed by the unique NOCASE index from 006. SQL unchanged. Q3 tests show it returns at most that one person, and an unknown name gives 200 with an empty list.</li>
+<li><strong>Rule 1 (name identifies a person).</strong> The only lookup by name is <code>GET /Person?name=</code>: exact, trimmed, ASCII case-insensitive, backed by the unique NOCASE index from 006. SQL unchanged. Q3 tests show it returns at most that one person, and an unknown name gives 200 with an empty list. On a database that predates the index and still holds case variants, the list returns every variant (<code>PersonResolutionPreIndexHttpTests</code>: ids 4 and 9).</li>
 <li><strong>Rule 2 (no astronaut rows without an assignment).</strong> SQL unchanged (<code>LEFT JOIN</code>, filters on the joined columns). Q3 tests: Mira (unassigned) is returned for <code>name</code> alone, and never with <code>rank</code> or <code>dutyTitle</code>. Empty strings for <code>currentRank</code>/<code>currentDutyTitle</code> stay as before.</li>
 <li>Rules 3-7 are not touched (task 009). Regression only.</li>
 </ul>
 
 <h2>Tests</h2>
-<p>Full Given/When/Then is in <a href="../contracts/008/tests.md">tests.md</a>. Inventory:</p>
+<p>Full Given/When/Then is in <a href="../contracts/008/tests.md">tests.md</a>. Inventory (as merged):</p>
 <h3>Deleted</h3>
 <ul>
 <li><code>GetPersonByNameQueryTests.cs</code> (whole file, 10 tests).</li>
@@ -190,81 +206,92 @@ public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeopl
 <li><code>H3</code>: query URL only.</li>
 <li><code>H5b</code>: <code>?name=aoife%20o'brien</code> returns her in <code>people</code>.</li>
 <li><code>H9</code>: asserts the absence of <code>/Person/{name}</code> instead of its responses.</li>
-<li><code>H1</code>: also asserts the single NameRule message.</li>
+<li><code>H1</code>: also asserts the single NameRule message (renamed <code>H1_TooLongFilter_Is400_WithOnlyTheSharedNameRuleMessage</code>).</li>
 <li><code>NameRuleHttpTests.X1</code>: drop the <code>/Person/</code> GET row.</li>
+<li><span class="tag amend">Amendment 1</span> <code>PersonUpdateHttpTests.P15_AnUnrouteableMethodOrPath_IsNotAffected</code>: <code>GET /Person/Mira%20Okafor</code> now expects 405 (was 200). <code>DELETE /Person/1</code> is still 405.</li>
+<li><span class="tag amend">Amendment 1</span> <code>PersonResolutionPreIndexHttpTests.GetDuties_AndGetPerson_ResolveTheSamePerson</code> renamed <code>GetDuties_PicksTheExactCaseRow_WhileGetPeopleListsEveryCaseVariant</code>. The duty assertions are unchanged. <code>GET /Person/{name}</code> is replaced by <code>GET /Person?name=</code>, asserting 200 and ids exactly [4, 9] (no unique index in this fixture).</li>
 </ul>
 <h3>Kept unchanged</h3>
-<p><code>GetPeopleQueryTests</code> (handler level, <code>new GetPeople { ... }</code> still compiles), <code>PersonHttpTests</code> H1, H2, H2c, H2d, H4, H7, H10, F1-F7, <code>ResponseShapeTests.GetPeopleResult_*</code> and the duty shape tests, <code>PersonUpdateHttpTests</code>, <code>PersonCreate*</code>, <code>AstronautDuty*</code>, <code>PersonHttpProductionTests</code>, migration, seed and initializer tests.</p>
+<p><code>GetPeopleQueryTests</code> (handler level, <code>new GetPeople { ... }</code> still compiles), <code>PersonHttpTests</code> H2, H2c, H2d, H4, H7, H10, F1-F4, F6, F7, <code>ResponseShapeTests.GetPeopleResult_*</code> and the duty shape tests, <code>PersonUpdateHttpTests</code> except P15, <code>PersonCreate*</code>, <code>AstronautDuty*</code>, <code>PersonResolutionPreIndexHttpTests</code> except the Theory above, <code>PersonHttpProductionTests</code>, migration, seed and initializer tests.</p>
 <h3>Added</h3>
 <ul>
 <li><strong>PersonQueryHttpTests</strong> (new file):
   <ul>
-  <li>Q1 removed route: 405, <code>Allow: PUT</code>, empty body, DB unchanged.</li>
+  <li>Q1 removed route: 405, <code>Allow: PUT</code>, empty body, DB unchanged (7 paths). Q1h HEAD gives 405 with <code>Allow: PUT</code>. Q1p <code>PUT /Person/abc</code> with a JSON body is still 400.</li>
   <li>Q2 parameter-name casing.</li>
-  <li>Q3 each filter alone, pairs and triple, AND, rule 2, exact match, unknown name returns 200 with an empty list and the exact envelope.</li>
+  <li>Q3 (a-m) each filter alone, pairs and triple, AND, rule 2, exact match (fragments including <code>ra</code>), unknown name returns 200 with an empty list and the exact envelope. Q3m: every item has exactly the six members.</li>
   <li>Q4 repeated parameter: the first value wins.</li>
-  <li>Q5 unknown and prefix-like parameters (<code>query</code>, <code>Query</code>, <code>query.name</code>, <code>foo</code>) are ignored and never bypass validation.</li>
-  <li>Q6 trimming of every ASCII control whitespace at both edges and the 100-after-trim boundary.</li>
-  <li>Q7 400 cases with the exact key and message, no echo, several invalid keys at once.</li>
-  <li>Q8 hostile values (SQL-like, LIKE wildcards, very long input) never widen results or produce a 500.</li>
-  <li>Q9 Swagger.</li>
+  <li>Q5a-Q5f unknown and prefix-like parameters (<code>query</code>, <code>Query</code>, <code>query.name</code>, <code>foo</code>, <code>people</code>, bare <code>name</code>) are ignored and never bypass validation. Added in review:
+    <ul>
+    <li>Q5g: <code>?query=&amp;name=%25</code>, <code>?query[0]=x</code>, <code>?query.foo=1</code>, <code>?QUERY=x</code>, <code>?query=x&amp;Name=%25</code> and <code>?query.rank=MAJ&amp;name=%25</code> are all 400.</li>
+    <li>Q5h: <code>?rank=%25&amp;query.rank=MAJ</code> is 400.</li>
+    <li>Q5i: <code>?query.name=%25</code> is 200 with all six (not an alias).</li>
+    <li>Q5j: indexed <code>name[0]</code> is ignored, and an empty first repeated value means no filter.</li>
+    <li>Q5k: odd encodings (<code>%00</code>, <code>%FF</code>, comma-joined, repeated with an invalid first value) are 400 without echo.</li>
+    </ul></li>
+  <li>Q6 trimming of every ASCII control whitespace at both edges, the 100-after-trim boundary, inner tab and edge NBSP rejected, whitespace-only values (including non-ASCII) meaning no filter.</li>
+  <li>Q7 400 cases with the exact key and message, no echo, several invalid keys at once, plus the problem-body shape test.</li>
+  <li>Q8 hostile values (SQL-like, LIKE wildcards) never widen results or produce a 500 (the loop accepts 200 or 400 by design). A 4000-character value is 400.</li>
+  <li>Q9a-Q9d Swagger.</li>
   </ul></li>
 <li><strong>PersonCreateKestrelTests</strong>: Q1k, the 405 with an empty body on real Kestrel.</li>
 <li><strong>GetPeopleValidationTests</strong> (unit, <code>Validator.TryValidateObject</code>): V1 to V3, each property carries the rule independently and accepts trimmed values.</li>
 <li><strong>PersonControllerTests</strong>: C8, the controller sends the very instance it received (captured by the existing <code>CapturingMediator</code>).</li>
 <li><strong>UI</strong>:
   <ul>
-  <li>UI-1, <code>listPeople({ name: 'Elena Vasquez' })</code> sends <code>?name=Elena%20Vasquez</code>.</li>
-  <li>UI-2, <code>listPeople()</code> sends no params.</li>
+  <li>UI-1, <code>listPeople({ name: 'Elena Vasquez' })</code> sends <code>?name=Elena%20Vasquez</code> and emits the body unchanged.</li>
+  <li>UI-2, <code>listPeople({ name: 'Nobody' })</code> flushed with an empty list emits <code>people: []</code> and no error. (Amendment 1: corrected from "<code>listPeople()</code> sends no params", which never matched the contract.)</li>
   <li>UI-3, <code>getPerson</code> no longer exists on <code>StargateApi</code>.</li>
   <li>UI-4, <code>PersonFilters</code> has exactly the keys <code>name</code>, <code>rank</code>, <code>dutyTitle</code> (a compile-time check plus U3).</li>
   </ul>
   Existing U1-U7, U14, U15 stay.</li>
 </ul>
-<h3>Mutation targets (each must turn at least one test red)</h3>
-<ul>
-<li>Drop <code>Name = ""</code> on the action parameter (Q5a, Q5b).</li>
-<li>Drop <code>[FromQuery]</code> on the action parameter (415/400 instead of 200: Q3a).</li>
-<li>Drop <code>Name = "name"</code>, <code>"rank"</code> or <code>"dutyTitle"</code> on a property (Q7 exact error key, Q9 parameter names).</li>
-<li>Remove <code>[ValidName]</code> from any one property (V1, Q7).</li>
-<li>Replace <code>[ValidName]</code> with the old raw attributes (Q6).</li>
-<li>Controller builds a new <code>GetPeople</code> and drops a field (C8, Q3).</li>
-<li>Handler match changed to <code>LIKE</code> or <code>instr</code> (F1, Q3).</li>
-<li>Handler trim removed (GetPeopleQueryTests P-tests).</li>
-<li>Re-adding <code>GET /Person/{name}</code> (Q1, Q9).</li>
-<li>Filter not registered (Q9).</li>
-</ul>
+<h3>Mutation map (Amendment 1: the 10 mutations api-dev ran; each reported red)</h3>
+<p>"Caught by" lists the tests that, from reading them, assert the behaviour each mutation breaks. It is not a recorded failure log.</p>
+<div class="table-wrap"><table>
+<tr><th>#</th><th>Mutation</th><th>Caught by</th></tr>
+<tr><td>M1</td><td>Remove <code>Name = ""</code> from the action parameter (plain <code>[FromQuery]</code>)</td><td>Q5a, Q5b, Q5c, Q5g, Q5h; Q5d, Q5i (<code>query.name</code> becomes an alias)</td></tr>
+<tr><td>M2</td><td>Drop <code>[FromQuery]</code> from the action parameter (<code>[ApiController]</code> infers <code>[FromBody]</code>)</td><td>Q3a and every other GET /Person 200 test (415/400 instead of 200)</td></tr>
+<tr><td>M3</td><td>Remove <code>[ValidName]</code> from <code>Rank</code></td><td>V1 (Rank), Q7 <code>rank=a%2Fb</code>, Q7 several keys, Q7 only the invalid key, Q5h</td></tr>
+<tr><td>M4</td><td>Change a property's wire name</td><td>Q2, Q3 rows using that key, Q7 exact key, Q9a</td></tr>
+<tr><td>M5</td><td>Handler match <code>=</code> changed to <code>LIKE</code> (contains)</td><td>F1, Q3k, Q3l</td></tr>
+<tr><td>M6</td><td>Remove the trim from <code>ValidNameAttribute</code></td><td>Q6 rows a-e, Q6f, Q6g, H2b; POST/PUT trimming tests</td></tr>
+<tr><td>M7</td><td>Unregister <code>ValidNameParameterFilter</code></td><td>Q9a, Q9c</td></tr>
+<tr><td>M8</td><td>Reintroduce <code>GET /Person/{name}</code></td><td>Q1, Q1h, Q1k, Q9b, P15</td></tr>
+<tr><td>M9</td><td>Controller copies the bound object and drops a field</td><td>C8, Q2/Q3 rows using that field</td></tr>
+<tr><td>M10</td><td>Remove the trim from the handler's <code>Normalize</code></td><td>Q6 rows a-e, F2, GetPeopleQueryTests P3 and P12</td></tr>
+</table></div>
 
 <h2>Risks and rollout</h2>
 <ul>
 <li><strong>Data</strong>: none. Read-only endpoint, no migration.</li>
-<li><strong>Backward compatibility</strong>: callers of <code>GET /Person/{name}</code> get 405 (not 404). They must switch to <code>?name=</code> and treat an empty <code>people</code> list as "not found". The only in-repo caller (UI <code>getPerson</code>) is removed in the same commit. GET filters accept more input than before (edge control whitespace, padding). No input that was accepted is now rejected.</li>
-<li><strong>Binding pitfalls</strong>: the prefix bypass (mitigated with <code>Name = ""</code> and locked by Q5). Swagger depends on a custom filter (locked by Q9).</li>
+<li><strong>Backward compatibility</strong>: callers of <code>GET /Person/{name}</code> get 405 (not 404). They must switch to <code>?name=</code> and treat an empty <code>people</code> list as "not found". The only in-repo caller (UI <code>getPerson</code>) is removed in the same change. GET filters accept more input than before (edge control whitespace, padding). No input that was accepted is now rejected.</li>
+<li><strong>Binding pitfalls</strong>: the prefix bypass (mitigated with <code>Name = ""</code> and locked by Q5a-Q5k). Swagger depends on a custom filter (locked by Q9).</li>
 <li><strong>Rollback</strong>: revert the merge commit. No state to undo.</li>
 <li><strong>Changelog</strong> (<code>api/README.md</code>, under "Changelog (breaking changes)", newest first):
   <ul>
   <li>Task 008 (BREAKING): <code>GET /Person/{name}</code> is removed. Any GET on <code>/Person/{x}</code> now returns <strong>405 Method Not Allowed</strong> with <code>Allow: PUT</code> and an empty body (the path is <code>PUT /Person/{personId}</code>'s). Use <code>GET /Person?name=&lt;name&gt;</code>. An unknown person is 200 with an empty <code>people</code> list, not 404. <code>?name=</code> has been exact since task 006 (C2).</li>
   <li>Task 008 (not breaking): <code>GET /Person</code> filters are trimmed of ASCII whitespace before validation, like POST/PUT. A leading or trailing tab, LF, VT, FF or CR, or padding beyond 100 characters, now returns 200 instead of 400. An over-long value's 400 message is now the shared name-rule message (one message instead of "The field x must be a string with a maximum length of 100."). Swagger: <code>/Person</code> query parameters no longer show <code>minLength: 0</code>; <code>GET /AstronautDuty</code>'s <code>name</code> now shows <code>maxLength</code> and <code>pattern</code>.</li>
   </ul></li>
-<li><strong>Not editable by agents</strong>: <code>CLAUDE.md</code>'s layout line still lists <code>GetPersonByName</code> under <code>Business/Queries/</code>. Please update it yourself (Q3).</li>
+<li><strong>CLAUDE.md</strong>: the layout line was updated by the user at approval (commit <code>0a55d90</code>).</li>
 </ul>
 
 <h3>QA must check (fresh seeded Development DB, BASE = e950203 vs HEAD)</h3>
 <ol>
 <li>Send every URL from the probe list in <a href="../contracts/008/tests.md">tests.md section 6</a> to BASE and HEAD. Same status and body (traceId ignored) for all rows marked "same". Exactly the listed differences for the rest.</li>
-<li>Removed route on HEAD: <code>GET</code> and <code>HEAD</code> on <code>/Person/Elena%20Vasquez</code>, <code>/Person/Nobody</code>, <code>/Person/1</code>, <code>/Person/%20</code>, <code>/Person/a%2Fb</code> each return 405, <code>Allow: PUT</code>, <code>Content-Length: 0</code>. The DB is unchanged afterwards.</li>
+<li>Removed route on HEAD: <code>GET</code> and <code>HEAD</code> on <code>/Person/Elena%20Vasquez</code>, <code>/Person/Nobody</code>, <code>/Person/1</code>, <code>/Person/%20</code>, <code>/Person/a%2Fb</code> each return 405, <code>Allow: PUT</code>, <code>Content-Length: 0</code>. The DB is unchanged afterwards. (On BASE, HEAD on these paths is 405 with <code>Allow: GET, PUT</code>.)</li>
 <li>Swagger <code>/swagger/v1/swagger.json</code> diff BASE to HEAD: only the removal of <code>/Person/{name}</code> and <code>GetPersonByNameResult</code>, the removal of <code>minLength: 0</code> on three parameters, the <code>/Person</code> GET description wording, and the <code>/AstronautDuty</code> GET <code>name</code> additions.</li>
-<li>UI: <code>npm test -- --watch=false</code> and <code>npm run build</code> pass. Through the dev proxy, <code>/api/Person</code>, <code>/api/Person?rank=maj</code>, <code>/api/Person?name=elena%20vasquez</code> return the same as the API directly, and <code>/api/Person/Elena%20Vasquez</code> returns 405. Grep finds no <code>getPerson</code> or <code>GetPersonByNameResult</code>.</li>
-<li>Regression: <code>POST /Person</code> (201, then <code>Location</code> resolves to exactly that person via <code>GET /Person?name=</code>), <code>PUT /Person/{id}</code> (200/404/409/400; <code>PUT /Person/abc</code> still 400), <code>GET /AstronautDuty?name=</code> (200/404/400), <code>POST /AstronautDuty</code> (201/404/409/400).</li>
+<li>UI: <code>npm test -- --watch=false</code> and <code>npm run build</code> pass. Through the dev proxy, <code>/api/Person</code>, <code>/api/Person?rank=maj</code>, <code>/api/Person?name=elena%20vasquez</code> return the same as the API directly, and <code>/api/Person/Elena%20Vasquez</code> returns 405. <code>grep -rn "GetPersonByNameResult" exercise1/ui/src</code> and <code>grep -rn --exclude='*.spec.ts' "getPerson\b" exercise1/ui/src</code> both print nothing (Amendment 1: the spec's UI-3 legitimately contains <code>getPerson</code>).</li>
+<li>Regression: <code>POST /Person</code> (201, then <code>Location</code> resolves to exactly that person via <code>GET /Person?name=</code>), <code>PUT /Person/{id}</code> (200/404/409/400; <code>PUT /Person/abc</code> with a JSON body still 400, with no body still 415), <code>GET /AstronautDuty?name=</code> (200/404/400), <code>POST /AstronautDuty</code> (201/404/409/400).</li>
 <li><code>dotnet build -warnaserror</code>, <code>dotnet test</code> (coverage reported), and <code>grep -rw GetPersonByName exercise1/</code> outside <code>docs/</code> and <code>bin/obj</code> is empty.</li>
 </ol>
 
-<h3>Unverified items (cheap checks for the developers)</h3>
+<h3>Items unverified at planning time (Amendment 1: all now covered by merged tests)</h3>
 <ul>
-<li>The prefix pin was verified with the parameter named <code>filters</code>, not <code>query</code>. Q5a-Q5c check it with the final name.</li>
-<li>The probe ran on Kestrel via <code>dotnet run</code>. <code>WebApplicationFactory</code>'s TestServer should give the same 405 and empty body. Q1 checks it there, Q1k on Kestrel.</li>
-<li>The full existing suite was not run against the probe head. <code>dotnet test</code> is the check.</li>
-<li>Vitest and the Angular build were not run. <code>npm test -- --watch=false</code> and <code>npm run build</code> are the checks.</li>
+<li>The prefix pin was verified in the probe with the parameter named <code>filters</code>, not <code>query</code>. Q5a-Q5k check it with the final name.</li>
+<li>The probe ran on Kestrel via <code>dotnet run</code>. Q1 checks the 405 and empty body on <code>WebApplicationFactory</code>'s TestServer, and Q1k on Kestrel.</li>
+<li>The full existing suite was not run against the probe head. This surfaced P15 and the pre-index resolution test (amendment item 2).</li>
+<li>Vitest and the Angular build were not run. This surfaced the UI grep-gate conflict (amendment item 1).</li>
 </ul>
 
 <h2>Subtasks</h2>
@@ -274,23 +301,24 @@ public async Task&lt;IActionResult&gt; GetPeople([FromQuery(Name = "")] GetPeopl
 <tr><td>S2</td><td>ui / ui-dev</td><td>Remove <code>getPerson</code> and <code>GetPersonByNameResult</code>, doc comments, Vitest (section 5 of tests.md).</td><td>Approved contract only</td></tr>
 <tr><td>S3</td><td>lead, then qa-tester</td><td>Integrate S1 and S2 (no shared files), run both suites, then QA as above.</td><td>S1, S2</td></tr>
 </table></div>
-<p>S1 and S2 touch disjoint folders and can run in parallel.</p>
+<p>S1 and S2 touch disjoint folders and can run in parallel. (As merged: S1 and S2 were merged into the task branch, followed by a review-round test commit, <code>af4c6bb</code>, that added Q5g-Q5k.)</p>
 
 <h2>Contracts</h2>
 <ul>
-<li><a href="../contracts/008/contract.html">contract.html</a>: one-page summary with breaking changes flagged</li>
-<li><a href="../contracts/008/openapi.yaml">openapi.yaml</a></li>
-<li><a href="../contracts/008/data.md">data.md</a></li>
-<li><a href="../contracts/008/types.ts">types.ts</a></li>
-<li><a href="../contracts/008/tests.md">tests.md</a></li>
+<li><a href="../contracts/008/contract.html">contract.html</a>: one-page summary with breaking changes flagged (Amendment 1 note at the top)</li>
+<li><a href="../contracts/008/openapi.yaml">openapi.yaml</a> (unchanged by amendment 1)</li>
+<li><a href="../contracts/008/data.md">data.md</a> (amendment 1: validation step 1 note, HEAD/PUT routing note)</li>
+<li><a href="../contracts/008/types.ts">types.ts</a> (unchanged by amendment 1)</li>
+<li><a href="../contracts/008/tests.md">tests.md</a> (amendment 1: sections 1, 2, 3, 5, 6 and new section 7)</li>
 </ul>
 
-<h2>Questions for you</h2>
+<h2>Questions (answered at approval of revision 1)</h2>
 <ol>
-<li><strong>Q1: 405 instead of 404 for the removed route.</strong> Recommendation: <strong>accept 405</strong> (<code>Allow: PUT</code>, empty body). It is correct HTTP, and it meets every other part of your decision. The alternative is a <code>{personId:int}</code> constraint on PUT: <code>GET /Person/Ada</code> would return 404 but <code>GET /Person/123</code> would still return 405, and <code>PUT /Person/abc</code> would change from 400 to 404. If you choose that, I revise only the Q1 rows, the openapi note and the changelog line.</li>
-<li><strong>Q2: The over-length 400 message changes</strong> to the shared name-rule message (it already mentions "at most 100 characters"), the same as writes. Recommendation: accept. Keeping the old text would need a second attribute that validates the raw value, which defeats the trimming unification.</li>
-<li><strong>Q3: CLAUDE.md layout line</strong> still lists <code>GetPersonByName</code>. Agents may not edit CLAUDE.md. Recommendation: change it to <code>(GetPeople, GetAstronautDutiesByName)</code> yourself when you approve.</li>
+<li><strong>Q1: 405 instead of 404 for the removed route.</strong> Answered: <strong>405 accepted</strong> (<code>Allow: PUT</code>, empty body). No <code>{personId:int}</code> constraint on PUT.</li>
+<li><strong>Q2: The over-length 400 message changes</strong> to the shared name-rule message. Answered: accepted.</li>
+<li><strong>Q3: CLAUDE.md layout line.</strong> Answered: updated by the user to <code>(GetPeople, GetAstronautDutiesByName)</code>.</li>
 </ol>
+<p>Open for amendment 1: none, beyond re-approval. The known, deliberately accepted non-ASCII-whitespace behaviour leaves the <code>InputRules.cs:10</code> comment slightly inaccurate. Rewording it is a source change outside this amendment. Say if you want it queued.</p>
 </main>
 </body>
 </html>

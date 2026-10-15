@@ -1,7 +1,7 @@
 ---
 id: 007
 title: Fix the AstronautDuty endpoints (SQL injection, duties by name query param, validated create)
-status: in-progress   # draft | ready | planned | approved | in-progress | done | blocked
+status: done   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]   # api | ui | infra | db
 ---
 

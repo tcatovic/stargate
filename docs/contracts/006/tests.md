@@ -1,153 +1,214 @@
-# Task 006: tests each platform must satisfy (revision 1)
+# Task 006: tests each platform must satisfy (revision 2)
 
 Markdown because agents read and edit it as text. Every test asserts behaviour (status, headers, body, persisted state), not implementation.
 
-Notation:
+**Revision 2 changes**
+- New: section A (existing tests to delete, rewrite or keep).
+- New: sections C1 and C2.
+- C3 tests rewritten to ASCII names: H2, H3, H4, H5, P3, P4, K1.
+- H8 has lost its raw-bound row.
+- New tests: P17 and X1.
+- The mutation table has been extended.
 
-- `NFD(x)` is the canonical decomposition of x.
+**Notation**
 - `<U+XXXX>` is that code point.
-- "Dump" is `TestDatabase.Dump()`. `Dump("AstronautDetail", "AstronautDuty")` is the astronaut tables only.
-- "Seed" is `DevelopmentSeedData.People()`: 6 people, namely Mira Okafor, Kenji Watanabe, Tomas Lindqvist, Priya Raman, Elena Vasquez and Desmond Achebe.
-- "Envelope409" means all of the following:
-  - The body has exactly the keys `id`, `message`, `responseCode`, `success`.
-  - `id` is JSON null.
-  - `success` is false.
-  - `message` is `"A person with this name already exists"`.
-  - `responseCode` is 409.
-  - The response has **no** `Location` header.
+- "Dump" is `TestDatabase.Dump()`.
+- "Seed" is `DevelopmentSeedData.People()`: Mira Okafor, Kenji Watanabe, Tomas Lindqvist, Priya Raman, Elena Vasquez and Desmond Achebe.
 
-## Shared test doubles (refactor, no behaviour change)
+**"Envelope409"** means all of the following:
+- The body keys are exactly `id`, `message`, `responseCode` and `success`.
+- `id` is JSON null.
+- `success` is false.
+- `message` is `"A person with this name already exists"`.
+- `responseCode` is 409.
+- There is no `Location` header.
 
-- E1: Move `ThrowOnSave` and `RenameOnAnotherConnection` from `UpdatePersonHandlerTests.cs` to `TestDoubles.cs` as `internal sealed`.
-  - Rename `RenameOnAnotherConnection` to `SqlOnAnotherConnectionBeforeSave`.
-  - The existing H11/H12b update tests stay green and unchanged apart from the type name.
-- E2: Add `CountingCommandInterceptor : DbCommandInterceptor` to `TestDoubles.cs`. It records the text of every command executed, so tests can assert that no `INSERT INTO "Person"` was issued.
+**NONASCII**, the shared hostile list, as C# literals:
 
-## API: handler (`CreatePersonHandlerTests.cs`, seeded `TestDatabase`, real `StargateContext`, `CapturingLogger<CreatePersonHandler>`)
+```
+"Zoë", "José", "Émile", "Renée", "Ａda", "Аda", "Αda", "Ada 🚀",
+" Ada", "Ada ", "　Ada", "\u0085Ada", "Ada ", "A da", "O’Brien", "Kate",
+"ſam", "٣", "กิ", "Ada​", "Adaㅤ", "Ada᠎", "᠎Ada"
+```
 
-- H1 Given the seed, When `CreatePerson { Name = "Ada Lovelace" }`, Then:
-  - `ResponseCode` 201, `Success` true, `Message` "Successful".
-  - `Id` equals the stored row's Id and is >= 1.
-  - `Name` is "Ada Lovelace".
-  - The Person count is 7.
-- H2 Given the seed, When the name is `"  Ada \t"`, `"<U+00A0>Ada<U+3000>"` or `" Ada  Lovelace "`, Then 201 and the stored name is `"Ada"`, `"Ada"` or `"Ada  Lovelace"` respectively (inner whitespace is kept). Run each case on a fresh DB.
-- H3 Given the seed, When the name is `NFD("Renée")`, Then 201 and the stored value equals `"Renée"` (U+00E9, length 5).
-- H4 Given the seed and a `CountingCommandInterceptor`, When the name is `"Mira Okafor"`, `"mira okafor"`, `"  MIRA OKAFOR "` or `"<U+00A0>Mira Okafor"`, Then:
-  - The result is 409, `Id` null, `Name` null, the message as in Envelope409.
+## A. Existing tests (commit set noted per row)
+
+| File | Test | Action | Set |
+| --- | --- | --- | --- |
+| InputRulesTests | R10, R13b, R13c, R13d, R14, R15, R16, R22, R23 | **Delete** | C1 |
+| InputRulesTests | R2 theory | Rewrite: remove the `Zoë` and `José` rows | C1 |
+| InputRulesTests | R4 theory | Keep all rows. The new R4b (below) covers NONASCII | C1 |
+| InputRulesTests | R11 | Rewrite: keep the 3 ASCII rows. Add a theory where each of `<U+00A0>Ada`, `Ada<U+3000>`, `<U+0085>Ada` and `Ada<U+2003>` comes back from `Normalize` unchanged | C1 |
+| InputRulesTests | R13 theory | Rewrite as "R13_NonAsciiIsInvalidAnywhere". Rows: `Ada<U+3164>`, `Ada<U+200B>`, `A<U+034F>da`, `Ada<U+FE0F>`, `A<U+180E>da`, `Ada<U+180E>`, `<U+180E>Ada`. Assert `IsValidName(Normalize(x))` is false | C1 |
+| InputRulesTests | R18 | Retitle to `R18_LengthIsMeasuredAfterTrimming`. The body is unchanged | C1 |
+| InputRulesTests | R19 | Rewrite: `"Renée"` is now **false**. Message equals the new `AllowedCharactersMessage` text. Everything else unchanged | C1 |
+| InputRulesTests | R20 | Retitle to `R20_SeedNamesAreValidAndAlreadyNormalised`. The body is unchanged | C1 |
+| InputRulesTests | R21 | Rewrite as `R21_NonAsciiWhitespaceIsNotTrimmed_AndIsInvalid`. `Normalize(" Ada ")` and `Normalize("　Ada\u0085")` are unchanged, and both are invalid | C1 |
+| InputRulesTests | R1, R2 (100 chars), R3, R12, R17, R18b | Keep | - |
+| UpdatePersonHandlerTests | H4 (NFD stored as NFC), H10 (NFD and non-ASCII case variants) | **Delete** | C1 |
+| UpdatePersonHandlerTests | H13 theory | Add rows `"Renée"`, `"Renée"`, `" Ada"` | C1 |
+| UpdatePersonHandlerTests | H18 | Rename to `H18_AnOverlongName_IsRejected`. Drop the raw-bound comment. The 801 and 800 assertions stay | C1 |
+| UpdatePersonHandlerTests | `RenameOnAnotherConnection`, `ThrowOnSave` | Move to `TestDoubles.cs` (internal sealed). Rename the first to `SqlOnAnotherConnectionBeforeSave` | C3 |
+| UpdatePersonHandlerTests | H1-H3, H5-H9, H11-H12b, H14-H17 | Keep. H3 and H9 tab rows still trim | - |
+| PersonUpdateHttpTests | P13 | Rewrite as `P13_NonAsciiIsRejectedOnPutAndOnTheReadSide`. Each of the following returns 400 and changes nothing: PUT `"Renée Ödegaard"`, `GET /Person?name=Rene%CC%81e`, `GET /Person?name=Ada%E3%85%A4`, `GET /Person/Jos%C3%A9` | C1 |
+| PersonUpdateHttpTests | P1 | `Get("/Person?name=Lindqvist")` becomes `Get("/Person?name=mira%20okafor-lindqvist")`. Assert that `Names(list)` equals exactly `["Mira Okafor-Lindqvist"]` | C2 |
+| PersonUpdateHttpTests | P2-P12, P14-P19 | Keep. The P6 Unicode rows and P19 are still valid 400 cases | - |
+| GetPeopleQueryTests | P11 | **Delete** | C1 |
+| GetPeopleQueryTests | P2 | Rewrite as `P2_NameIsCaseInsensitiveExact`. Expected results: `"ra"` gives `[]`, `"ELENA"` gives `[]`, `"okafor"` gives `[]`, `"elena vasquez"` gives `[Elena Vasquez]`, `"MIRA OKAFOR"` gives `[Mira Okafor]` | C2 |
+| GetPeopleQueryTests | P5 | `"priya"` becomes `"priya raman"`, and `"elena"` becomes `"elena vasquez"` (still empty with Pilot) | C2 |
+| GetPeopleQueryTests | P7 | `"Mira"` becomes `"mira okafor"`, and `"kenji"` becomes `"kenji watanabe"` | C2 |
+| GetPeopleQueryTests | P9 | Rewrite as `P9_WildcardCharactersAreLiteralInAnExactMatch`, using the same fixture. Expected results: `"%"` gives `[]`, `"_"` gives `[]`, `"n_M"` gives `[]`, `"ann_marie"` gives `[Ann_Marie]` (not AnnxMarie), `"Back\\Slash"` gives `[Back\Slash]`, `"100% real"` gives `[100% Real]` | C2 |
+| GetPeopleQueryTests | P12 | `" elena "` becomes `" elena vasquez "` | C2 |
+| GetPeopleQueryTests | P1, P3, P4, P6, P7b, P8, P10, CancelledToken | Keep | - |
+| PersonHttpTests, GetPersonByNameQueryTests, PersonControllerTests, ResponseShapeTests, NullPersonGuardTests, SeedDataRulesTests, PersonHttpProductionTests, PersonNameIndexMigrationTests (M1-M13), MigrationTests, DevelopmentDatabaseInitializerTests, StarbaseDatabaseTests | all | Keep unchanged | - |
+
+## C1. New tests: ASCII rule
+
+- R4b: Given each NONASCII value, When `IsValidName(Normalize(x))`, Then false. Also, When the raw `RegularExpressionAttribute(AllowedCharactersPattern)` is applied, Then false.
+- R24: Given `"Aoife O'Brien"`, `"Anne-Marie St. John"`, `"2LT"`, `"RETIRED"`, `"O'Brien-Smith Jr."` and 100 letters, Then valid.
+- R25: Given `"Kate"` (Kelvin sign) and `"ſam"` (long s), Then invalid. This guards against `IgnoreCase`. Given `"٣"` and `"１"` (non-ASCII digits), Then invalid. This guards against `\d`.
+- R26: `ValidNameAttribute` with `new string('a', 5000)`: invalid, and no exception (there is no raw bound). With `"   " + new string('a', 100) + "\t"`: valid.
+- X1 (`PersonHttpTests` or a new `NameRuleHttpTests.cs`, Development, seeded): for each NONASCII value `v`, each of the following returns 400:
+  - `GET /Person?name=` + `Uri.EscapeDataString(v)`
+  - `GET /Person/` + `Uri.EscapeDataString(v)`
+  - `PUT /Person/{mira}` with `{"name": v}`
+  - `POST /Person` with `{"name": v}` (this request added in C3)
+
+  In every case:
+  - The body contains neither `v` nor its escaped form.
   - Dump is unchanged.
-  - The interceptor saw no `INSERT` command (pre-check path).
-- H5 Given a person `"Renée"` created through the handler, When the name is `NFD("renée")` (lowercase), Then 409. And When the name is `"RENÉE"`, Then 201. This pins the documented limit that `NOCASE` folds ASCII only.
-- H6 Race. Given the seed and `SqlOnAnotherConnectionBeforeSave(conn, INSERT INTO "Person" ("Name") VALUES ('Zed Unique'))`, When the name is `"zed unique"`, Then:
-  - The interceptor ran.
-  - The result is 409, `Id` null.
-  - Exactly one row matches `'zed unique' COLLATE NOCASE`, and it has the intruder's Name `Zed Unique`.
-  - The Person count is 7.
-- H7 Given `ThrowOnSave(new DbUpdateException("fk", new SqliteException("fk", 19, 787)))`, When a valid new name, Then `DbUpdateException` propagates (it is NOT mapped to 409) and the Person count is 6.
-- H8 Given the names `""`, `"   "`, `"<x>"`, `"Ada<U+3164>"`, `new string('a', 101)` and `new string('a', 801)`, When sent to the handler directly, Then `ArgumentException` is thrown. Its message does not contain the value, and Dump is unchanged. For the 801-character input, `Normalize` must not run: a value of 801 spaces plus `"Ada"` is rejected even though it would trim to a valid name.
-- H9 Rule 2. Given the seed, When `"Ada Lovelace"` is created, Then `Dump("AstronautDetail", "AstronautDuty")` is identical before and after, and no `AstronautDetail` row has the new PersonId.
-- H10 Logging. When H1 and H4 run, Then:
-  - The log has an Information entry with the new id.
-  - The log has an Information entry "Create person rejected: name in use".
-  - No entry's message contains "Ada", "Lovelace" or "Mira".
-- H11 Given a cancelled `CancellationToken`, When a valid new name, Then `OperationCanceledException` is thrown and the Person count is 6.
+  - POST has no `Location` header.
 
-## API: HTTP (`PersonCreateHttpTests.cs`, `WebApplicationFactory<Program>`, Development, seeded temp DB, `AllowAutoRedirect = false`, same `Send` helper as `PersonUpdateHttpTests`)
+## C2. New tests: exact filter (`PersonHttpTests`)
 
-- P1 When `POST /Person {"name":"Ada Lovelace"}`, Then:
-  - 201.
-  - The body keys are exactly `id`, `message`, `responseCode`, `success`. The order is not asserted, and there is no `name` key.
-  - `success` true, `message` "Successful", `responseCode` 201.
-  - `id` equals the DB Id.
-  - The `Location` header equals `/Person?name=Ada%20Lovelace`.
-  - `GET` of that Location returns 200, and `people` contains an entry whose `personId` equals `id`, `name` is "Ada Lovelace", `currentRank` "", `currentDutyTitle` "", and `careerStartDate` and `careerEndDate` are null.
-- P2 When `{"name":"   Ada Lovelace  "}`, Then 201, the stored name is "Ada Lovelace", and `Location` is `/Person?name=Ada%20Lovelace` (built from the stored name).
-- P3 When `{"name":"Zoë O'Brien-Smith Jr."}`, Then 201 and `Location` is `/Person?name=Zo%C3%AB%20O%27Brien-Smith%20Jr.`. Every character of the header value is ASCII (< 0x80).
-- P4 Duplicates. For each of `"Mira Okafor"`, `"mira okafor"`, `"  MIRA OKAFOR "`, `"Mira Okafor<U+00A0>"`: Then 409 with Envelope409, and Dump is unchanged. Separately: create `"Renée"` (201), then post `NFD("Renée")`, which gives 409 and one row.
-- P5 Invalid names. Each body in `PersonUpdateHttpTests.InvalidNameBodies` (same list: `""`, `"   "`, `null`, `{}`, 101 characters, `<script>alert(1)</script>`, `x' OR '1'='1`, `Robert'); DROP TABLE Person;--`, `a\tb`, `Ada<U+3164>`, `<U+0301>Ada`, `Ada<U+200B>`, `Ada<U+115F><U+1160>`, `A<U+034F>da`, `Ada<U+FE0F>`, `q` + 4 marks) gives:
-  - 400 with `status` 400.
-  - An `errors` key equal to `name`, compared case-insensitively.
-  - A non-blank submitted value does not appear in the body.
-  - No `Location` header.
+- F1: Given the seed, When `GET /Person?name=ra`, `?name=elena`, `?name=Okafor` or `?name=Mira%20Okafo`, Then 200, `success` true and an empty `people` array.
+- F2: When `?name=Elena%20Vasquez`, `?name=ELENA%20VASQUEZ` or `?name=%20%20elena%20vasquez%20`, Then 200 and `people` is exactly one entry: `Elena Vasquez`.
+- F3: When `?name=priya%20raman&rank=MAJ`, Then exactly Priya Raman. When `?name=priya%20raman&rank=CPT`, Then empty. When `?name=mira%20okafor&dutyTitle=Pilot`, Then empty (rule 2).
+- F4: Swagger `paths./Person.get` parameter `name`:
+  - its `description` contains "exact" and not "contains";
+  - each of the three parameters' `schema.pattern` equals `InputRules.AllowedCharactersPattern`.
+- F5: The file `exercise1/api/Business/Queries/GetPeople.cs`, read from the source tree via a path relative to the test assembly (the same way existing tests locate the API folder, or by `[CallerFilePath]`), contains neither `LIKE` nor `EscapeLike`. If locating the source is not already done in the suite, skip F5. F1 already fails for a contains implementation.
+
+## C3. POST /Person
+
+### Shared test doubles
+
+- E1: as in section A.
+- E2: add `CountingCommandInterceptor : DbCommandInterceptor` to `TestDoubles.cs`. It records each executed command's text.
+
+### Handler (`CreatePersonHandlerTests.cs`, seeded `TestDatabase`, `CapturingLogger<CreatePersonHandler>`)
+
+- H1: When `"Ada Lovelace"`, Then:
+  - 201, `Success` true, `Message` "Successful";
+  - `Id` is at least 1 and equals the row's Id;
+  - `Name` is "Ada Lovelace";
+  - the Person count is 7.
+- H2: When `"  Ada \t"`, `"\r\nAda\r\n"` or `" Ada  Lovelace "` (each on a fresh database), Then 201 and the stored name is `"Ada"`, `"Ada"` or `"Ada  Lovelace"` respectively.
+- H3: When `" Ada"`, `"Ada　"`, `"José"` or `"Renée"`, Then `ArgumentException` and Dump is unchanged. Non-ASCII is never trimmed or stored.
+- H4: Given a `CountingCommandInterceptor`, When `"Mira Okafor"`, `"mira okafor"`, `"  MIRA OKAFOR "` or `"Mira Okafor\t"`, Then:
+  - 409, with `Id` and `Name` null and the Envelope409 message;
+  - Dump is unchanged;
+  - no `INSERT` command was executed.
+- H5: When `"ada lovelace"` after `"Ada Lovelace"` was created, Then 409 and there is still one row.
+- H6 (race): Given `SqlOnAnotherConnectionBeforeSave(conn, INSERT INTO "Person" ("Name") VALUES ('Zed Unique'))`, When `"zed unique"`, Then:
+  - the interceptor ran;
+  - 409 with `Id` null;
+  - exactly one row matches `'zed unique' COLLATE NOCASE`, named `Zed Unique`;
+  - the count is 7.
+- H7: Given `ThrowOnSave(new DbUpdateException("fk", new SqliteException("fk", 19, 787)))`, Then the `DbUpdateException` propagates and the count is 6.
+- H8: Given `""`, `"   "`, `"<x>"`, `new string('a', 101)` or `new string('a', 5000)`, Then `ArgumentException`, its message does not contain the value, and Dump is unchanged.
+- H9 (rule 2): `Dump("AstronautDetail", "AstronautDuty")` is identical before and after a create, and there is no `AstronautDetail` row for the new id.
+- H10: The log has an Information entry with the new id and one with "Create person rejected: name in use". No entry contains "Ada", "Lovelace" or "Mira".
+- H11: With a cancelled token, Then `OperationCanceledException` and the count is 6.
+
+### HTTP (`PersonCreateHttpTests.cs`, Development, seeded temp DB, `AllowAutoRedirect = false`)
+
+- P1: `{"name":"Ada Lovelace"}` returns:
+  - 201;
+  - body keys exactly `id`, `message`, `responseCode`, `success` (no `name`);
+  - `success` true, `message` "Successful", `responseCode` 201, and `id` equal to the database Id;
+  - `Location` equal to `/Person?name=Ada%20Lovelace`.
+- P2: `{"name":"   Ada Lovelace  "}` returns 201, the stored name is "Ada Lovelace", and `Location` is `/Person?name=Ada%20Lovelace`.
+- P3: `{"name":"Aoife O'Brien-Smith Jr."}` returns 201 with `Location` equal to `/Person?name=Aoife%20O%27Brien-Smith%20Jr.`. Every header character is printable ASCII (0x21-0x7E).
+- P4 (duplicates): each of `"Mira Okafor"`, `"mira okafor"`, `"  MIRA OKAFOR "` and `"Mira Okafor\t"` returns 409 with Envelope409, and Dump is unchanged.
+- P5: each body in `PersonUpdateHttpTests.InvalidNameBodies` returns:
+  - 400 with `status` 400;
+  - an `errors` key equal to `name` (case-insensitive);
+  - a body that does not contain any non-blank submitted value;
+  - no `Location` header;
   - Dump unchanged.
-- P6 Body shape, with Content-Type `application/json`. For each pair (body, token): (`""`, -), (`"\"Tokenabc\""`, Tokenabc) [the pre-006 bare string], (`{"name":4242424242}`, 4242424242), (`[]`, -), (`{"name":`, -), (`{"name":"Tokenxyz",`, Tokenxyz). Then:
-  - 400 with non-empty `errors`.
-  - The token, when given, is not in the body.
-  - The body does not contain `"name":`.
+- P6 (body shape, `application/json`): each of (`""`, -), (`"\"Tokenabc\""`, Tokenabc), (`{"name":4242424242}`, 4242424242), (`[]`, -), (`{"name":`, -) and (`{"name":"Tokenxyz",`, Tokenxyz) returns:
+  - 400 with non-empty `errors`;
+  - a body that does not contain the token;
+  - a body without `"name":`;
   - Dump unchanged.
-- P7 Content type:
-  - P7a: `text/plain` or `application/xml` with a valid JSON body gives 415, and Dump is unchanged.
-  - P7b: the bare string `"Ada"` as `text/plain` gives 415.
-  - P7c: a request with no content and no Content-Type gives 415.
-  - Only the status is asserted, never the body.
-- P8 A name of 3000 `a` gives 400. The body does not contain 50 consecutive `a`, and Dump is unchanged.
-- P9 `Ada<U+180E>` and `<U+180E>Ada` give 400 with a `name` error, and nothing is stored.
-- P10 `{"name":"Kai Extra","id":999,"personId":5,"role":"admin"}` gives 201. `id` is not 999 and not 5, and exactly one row is named "Kai Extra".
-- P11 Concurrency, 5 rounds. Each round runs 6 parallel POSTs of `Zed Unique{n}`, `zed unique{n}`, `ZED UNIQUE{n}`, `Zed unique{n}`, `zed Unique{n}` and ` Zed Unique{n} ` (`Task.WhenAll`). Then:
-  - Exactly one is 201 and five are 409.
-  - None is >= 500.
-  - Exactly one row matches the name NOCASE.
-  - The Person count is 6 + n.
-- P12 Swagger. `GET /swagger/v1/swagger.json` gives the following:
-  - `paths./Person.post` exists with summary "Create a person".
-  - Its response codes are exactly 201, 400, 409, 415, 500.
-  - It has a `requestBody` whose `application/json` schema resolves to an object with a `name` property.
-  - The `CreatePersonResult` component schema has an `id` property and **no** `name` property.
-- P13 `{"name":"O'Brien"}` gives 201, the stored name is exactly `O'Brien`, and `Location` is `/Person?name=O%27Brien`.
-- P14 Rule 2 over HTTP. `Dump("AstronautDetail", "AstronautDuty")` is identical before and after P1's POST.
-- P15 POSTing `{"name":"Ada Lovelace"}` twice gives 201 and then 409 (Envelope409), with one row.
-- P16 Order of checks. `{"name":"Mira Okafor<script>"}` gives 400, not 409.
+- P7a: `text/plain` or `application/xml` with a valid body returns 415 and Dump is unchanged.
+- P7b: a bare `"Ada"` sent as `text/plain` returns 415.
+- P7c: no content and no Content-Type returns 415. The tests check the status only.
+- P8: a name of 3000 `a` returns 400. The body does not contain 50 consecutive `a`, and Dump is unchanged.
+- P9: NONASCII through POST is covered by X1.
+- P10: `{"name":"Kai Extra","id":999,"personId":5,"role":"admin"}` returns 201, `id` is not 999 or 5, and there is one "Kai Extra" row.
+- P11 (concurrency): run 5 rounds. Each round sends 6 parallel POSTs of `Zed Unique{n}`, `zed unique{n}`, `ZED UNIQUE{n}`, `Zed unique{n}`, `zed Unique{n}` and ` Zed Unique{n} `. Then:
+  - exactly one 201 and five 409;
+  - nothing at 500 or above;
+  - one row matching NOCASE;
+  - the count is 6 + n.
+- P12 (Swagger): `paths./Person.post` has summary "Create a person" and responses exactly 201, 400, 409, 415 and 500. Its `requestBody` `application/json` schema has `name`. The `CreatePersonResult` component has `id` and **no** `name`.
+- P13: `{"name":"O'Brien"}` returns 201, the stored name is `O'Brien`, and `Location` is `/Person?name=O%27Brien`.
+- P14 (rule 2): `Dump("AstronautDetail", "AstronautDuty")` is identical before and after P1.
+- P15: posting the same name twice gives 201, then 409 (Envelope409), with one row.
+- P16: `{"name":"Mira Okafor<script>"}` returns 400, not 409.
+- P17 (Location round trip): for each of `"Ada Lovelace"` and `"Aoife O'Brien Jr."`, after the 201, a `GET` of the `Location` value returns 200 with `people` of exactly one entry. That entry's `personId` equals `id`, and its `name` is the stored name. `currentRank` and `currentDutyTitle` are `""`, and `careerStartDate` and `careerEndDate` are null.
 
-## API: real Kestrel (`PersonCreateKestrelTests.cs`, `factory.UseKestrel(0); factory.StartServer();`, as in `PersonHttpProductionTests`)
+### Real Kestrel (`PersonCreateKestrelTests.cs`, `factory.UseKestrel(0); factory.StartServer();`)
 
-- K1 Development, seeded temp DB. When `{"name":"Zoë Ångström"}`, Then:
-  - 201 (not 500).
-  - `Location` is `/Person?name=Zo%C3%AB%20%C3%85ngstr%C3%B6m`.
-  - The row is stored once.
-- K2 Production, never-migrated temp DB. When `{"name":"Secretname Probe"}`, Then:
-  - 500.
-  - The body contains none of: `no such table`, `SqliteException`, `Person`, `Secretname`, `Exception`.
-- K3 Development, seeded. When the body is larger than 4096 bytes (a 5000-character name), Then 413 and the Person count is 6.
+- K1: Development, seeded. `{"name":"Aoife O'Brien Jr."}` returns 201, `Location` is exactly `/Person?name=Aoife%20O%27Brien%20Jr.`, and the row is stored once.
+- K2: Production, never-migrated DB. `{"name":"Secretname Probe"}` returns 500, and the body contains none of `no such table`, `SqliteException`, `Person`, `Secretname` or `Exception`.
+- K3: Development, seeded. A body over 4096 bytes returns 413, and the count is 6.
 
-## UI (`stargate-api.spec.ts`, `describe('createPerson')`, `HttpTestingController`)
+## C4. UI (`stargate-api.spec.ts`, `describe('createPerson')`)
 
-- U1 `createPerson(' Ada ')` sends exactly one request:
-  - Method `POST`, URL `/api/Person`.
-  - Body deep-equal to `{ name: ' Ada ' }` (unmodified, no other keys).
-- U2 `createPerson('')` still sends one POST with `{ name: '' }`.
-- U3 A 201 flush with `{ id: 7, success: true, message: 'Successful', responseCode: 201 }` emits `{ status: 'created', id: 7 }` exactly once, then completes.
-- U4 A 201 flush with `id` null, missing, `0`, `-1`, `1.5` or `'7'` errors with `Error('Malformed create response')`.
-- U5 409 emits `{ status: 'conflict' }` once and completes.
-- U6 400 with a `ValidationProblemDetails` body emits `{ status: 'invalid', errors: body.errors }`.
-- U7 400 with a null body, a string body, or an object without `errors` emits `{ status: 'invalid', errors: {} }`.
-- U8 415, 413, 500 and a network error (status 0) each error with an `HttpErrorResponse` of that status.
-- U9 Type check: there is no `any`, and the `CreatePersonRequest`, `CreatePersonResult` and `CreatePersonOutcome` exports match `docs/contracts/006/types.ts`. `npm run build` passes.
+- U1: `createPerson(' Ada ')` makes exactly one request: `POST /api/Person` with body deep-equal to `{ name: ' Ada ' }`.
+- U2: `createPerson('')` still sends a POST with `{ name: '' }`.
+- U3: a 201 with `{ id: 7, success: true, message: 'Successful', responseCode: 201 }` emits `{ status: 'created', id: 7 }` once, then completes.
+- U4: a 201 whose `id` is null, missing, `0`, `-1`, `1.5` or `'7'` errors with `Error('Malformed create response')`.
+- U5: 409 emits `{ status: 'conflict' }`.
+- U6: 400 with a `ValidationProblemDetails` body emits `{ status: 'invalid', errors: body.errors }`.
+- U7: 400 with a null body, a string body or a body without `errors` emits `{ status: 'invalid', errors: {} }`.
+- U8: 415, 413, 500 and status 0 each error with an `HttpErrorResponse` of that status.
+- U9: no `any`, and the exports match `types.ts`. `npm run build` passes.
 
-## Mutation targets (each must make at least one test fail)
+## Mutation targets (each must fail at least one test)
 
 | Mutation | Caught by |
 | --- | --- |
-| Remove `InputRules.Normalize` in the handler | H2, H3, P2 |
-| Remove the raw-length guard | H8 (801 spaces + Ada) |
-| Drop `EF.Functions.Collate(..., "NOCASE")` in the pre-check | H4 (no-INSERT assertion) |
-| Delete the pre-check | H4 |
-| `catch (DbUpdateException)` without the `IsUniqueViolation` filter | H7 |
-| Remove the unique-violation catch | H6, P11 |
-| Return 200 / `Ok(result)` instead of `Created` | P1 |
-| Remove `Uri.EscapeDataString` | P3 (ASCII assertion), K1 |
-| `Location` built from the raw input | P2 |
-| Remove `[JsonIgnore]` on `Name` | P1 (keys), P12 |
-| Remove `[Consumes]` | P7a, P7b |
-| Remove `[RequestSizeLimit]` | K3 |
-| Re-add a try/catch returning `ex.Message` | K2 |
-| Insert an `AstronautDetail` | H9, P14 |
-| Log the name | H10 |
-| Do not pass the `CancellationToken` | H11 |
-| UI: trim the name before sending | U1 |
-| UI: map 409 to `invalid`, or swallow 500 | U5, U8 |
+| Pattern uses `\p{L}` or `\w` | R4b, X1 |
+| Pattern uses `\d` | R25 |
+| `RegexOptions.IgnoreCase` added | R25 (Kelvin, long s) |
+| `Normalize` uses `Trim()` (Unicode set) | R11, R21, H3, X1 (NBSP rows) |
+| `Normalize` trims only `' '` | R11, H2, H4 (tab row) |
+| NFC re-added | R19 (`Renée` must stay invalid), H3 |
+| Length checked before trimming | R18, R26 |
+| `$` instead of `\z` | R17 |
+| Filter back to `LIKE` contains | P2, F1, P17 |
+| `COLLATE NOCASE` dropped from the name filter | P2 (`MIRA OKAFOR`), F2 |
+| Pre-check deleted or its NOCASE dropped | H4 (no-INSERT assertion) |
+| `catch (DbUpdateException)` without the filter | H7 |
+| Unique-violation catch removed | H6, P11 |
+| 200 instead of `Created` | P1 |
+| `Uri.EscapeDataString` removed | P3, K1, P17 |
+| Location built from the raw input | P2 |
+| `[JsonIgnore]` removed | P1, P12 |
+| `[Consumes]` removed | P7a, P7b |
+| `[RequestSizeLimit]` removed | K3 |
+| try/catch returning `ex.Message` re-added | K2 |
+| An `AstronautDetail` is inserted | H9, P14 |
+| The name is logged | H10 |
+| The token is not passed | H11 |
+| UI trims before sending | U1 |
+| UI maps 409 to `invalid`, or swallows 500 | U5, U8 |
 
-## Regression
+## Regression and gates
 
-- All existing API tests stay green, including `PersonUpdateHttpTests`, `UpdatePersonHandlerTests` (after E1), `MigrationTests` and `PersonNameIndexMigrationTests`.
-- `dotnet build -warnaserror` passes.
-- `dotnet ef migrations has-pending-model-changes` reports no changes.
-- All existing UI tests stay green.
+- After each commit set (C1, C2, C3), the whole API suite is green. `dotnet build -warnaserror` passes, and `dotnet ef migrations has-pending-model-changes` reports no changes.
+- After C4, `npm test -- --watch=false` and `npm run build` pass.

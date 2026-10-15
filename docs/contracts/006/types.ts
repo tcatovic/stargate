@@ -1,9 +1,15 @@
 /**
- * Contract for task 006 (revision 1): exact types the UI must use. `exercise1/ui/src/app/api/models.ts` must declare
+ * Contract for task 006 (revision 2): exact types the UI must use. `exercise1/ui/src/app/api/models.ts` must declare
  * CreatePersonRequest, CreatePersonResult and CreatePersonOutcome with identical names, fields, types and nullability.
  * Existing interfaces (BaseResponse, ValidationProblemDetails, ...) are unchanged and repeated only for reference.
  * StargateApiContract documents the new method; it is not copied into models.ts.
- * The UI never reads the Location header.
+ * The UI never reads the Location header and does no client-side name validation.
+ *
+ * Revision 2: no type changes. Comment wording only. Names are ASCII-only and trimmed of ASCII whitespace by the
+ * server, which does no Unicode normalisation. Two existing comments must be corrected in the same commit:
+ *   - models.ts UpdatePersonRequest: "The name is sent exactly as given; the server trims surrounding whitespace
+ *     (names are ASCII-only)."
+ *   - stargate-api.ts updatePerson: "(the server trims and normalises)" becomes "(the server trims)".
  */
 import { Observable } from 'rxjs';
 
@@ -27,7 +33,7 @@ export interface ValidationProblemDetails {
   traceId: string;
 }
 
-/** NEW. Body of POST /Person. The name is sent exactly as given; the server trims and NFC-normalises. */
+/** NEW. Body of POST /Person. The name is sent exactly as given; the server trims surrounding whitespace (names are ASCII-only). */
 export interface CreatePersonRequest {
   name: string;
 }

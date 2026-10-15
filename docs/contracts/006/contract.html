@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Contract 006: POST /Person create endpoint</title>
+<title>Contract 006 (rev. 2): ASCII names, exact name filter, POST /Person</title>
 <style>
   :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
   @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
@@ -19,7 +19,7 @@
   pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
   pre code { background:none; padding:0; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
-  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
   .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
   .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
   .table-wrap { overflow-x:auto; }
@@ -30,82 +30,107 @@
 </head>
 <body>
 <main>
-<p class="meta">Contract 006 &middot; revision 1 &middot; baseline <code>main</code> <code>f42dc41</code> &middot; plan: <a href="../../plans/006-create-person-endpoint.html">006-create-person-endpoint.html</a> &middot; status: awaiting approval</p>
-<h1>Contract 006: POST /Person becomes a validated create endpoint</h1>
-<p>One endpoint changes. There is no schema change. The UI gains one client method. The api and ui developers build against this page and the files listed at the bottom, in parallel.</p>
+<p class="meta">Contract 006 &middot; <strong>revision 2</strong> &middot; baseline <code>main</code> <code>f42dc41</code> &middot; plan: <a href="../../plans/006-create-person-endpoint.html">006-create-person-endpoint.html</a> &middot; status: awaiting approval</p>
+<h1>Contract 006: ASCII-only names, exact name filter, validated POST /Person</h1>
 
-<div class="card bad"><p><strong>Breaking changes</strong> (accepted in the task Decisions, except the <code>Location</code> target, which is Question 1 below):</p>
+<div class="card amend"><p><strong>Revision 2: what changed from revision 1</strong> (the user changed the scope)</p>
 <ul>
-<li><strong>Request body</strong>: <code>{ "name": "..." }</code> replaces the bare JSON string <code>"..."</code>. A bare string now gets 400 (with <code>application/json</code>) or 415 (any other content type).</li>
-<li><strong>Success</strong>: <strong>201 Created</strong> (was 200), <code>responseCode: 201</code>, plus a new <code>Location</code> header.</li>
-<li><strong>Duplicate</strong>: <strong>409</strong>. It used to be a 500 carrying EF's message, or a 200 with a second row for padded or NFD names.</li>
-<li><strong>Invalid name</strong>: <strong>400</strong> (was 200 and stored). There are also new 415 and 413 responses.</li>
-<li><strong>500 body</strong>: empty in Production. It used to carry the exception message.</li>
-<li><code>id</code> is now nullable: always a number on 201, <code>null</code> on 409.</li>
+<li><strong>New: ASCII-only name rule</strong>, for all four endpoints that use it. The NFC step, the invisible-character set, the combining-mark limit and the 800-character raw bound are removed. Only ASCII whitespace is trimmed, so a no-break space at an edge is 400. Files: <code>openapi.yaml</code> (<code>NameRule</code>), <code>data.md</code>, <code>tests.md</code> sections A and C1.</li>
+<li><strong>New: <code>GET /Person?name=</code> is exact</strong>, with no contains. Files: <code>openapi.yaml</code>, <code>data.md</code>, <code>tests.md</code> sections A and C2.</li>
+<li><strong>Location</strong> stays <code>/Person?name=&lt;encoded&gt;</code> (accepted). It now returns exactly the created person. The tests use ASCII names.</li>
+<li>The look-alike question is moot. The empty 500 body is accepted.</li>
+<li>No UI type changes. Two UI comments are corrected (<code>types.ts</code> header).</li>
 </ul></div>
 
-<h2>Request</h2>
+<div class="card bad"><p><strong>Breaking changes</strong> (all accepted by the user):</p>
+<ul>
+<li><strong>Non-ASCII names</strong> get 400 on <code>GET /Person</code> (filters), <code>GET /Person/{name}</code>, <code>PUT /Person/{personId}</code> and <code>POST /Person</code>. This includes previously valid names such as <code>Émile</code>, NFD input, and a no-break space at an edge. The validation message wording changes.</li>
+<li><strong><code>GET /Person?name=</code></strong> is now exact (case-insensitive, trimmed). A partial name returns an empty list. For example, <code>?name=elena</code> no longer finds <code>Elena Vasquez</code>.</li>
+<li><strong><code>POST /Person</code></strong> changes in several ways:
+  <ul>
+    <li>Body: <code>{ "name": "..." }</code> instead of a bare string (400 or 415).</li>
+    <li>Success: 201 (was 200), with a <code>Location</code> header.</li>
+    <li>Duplicate: 409 (was 500 or a duplicate row).</li>
+    <li>Invalid name: 400 (was stored).</li>
+    <li>New statuses: 415 and 413.</li>
+    <li>500: empty body (it used to contain the exception message).</li>
+  </ul></li>
+</ul></div>
+
+<h2>The name rule (one definition, used everywhere)</h2>
+<pre><code>trim ASCII whitespace (tab, LF, VT, FF, CR, space)   -- nothing else is trimmed
+then 1..100 characters, each one of:  A-Z a-z 0-9 space . ' -
+pattern ^[A-Za-z0-9 .'-]+\z   (no IgnoreCase, no \d, no Unicode normalisation)</code></pre>
+<ul>
+<li>Uniqueness and lookups compare ignoring ASCII case (SQLite NOCASE). For ASCII names that is complete case-insensitivity.</li>
+<li>GET filters and the GET route check the value <em>as sent</em>, so an edge tab or newline is 400 there. That is unchanged from today, and task 008 can unify it.</li>
+<li>Seed names, ranks and titles are all valid.</li>
+</ul>
+
+<h2>GET /Person?name=</h2>
+<div class="table-wrap"><table>
+<tr><th>Query</th><th>Before</th><th>After</th></tr>
+<tr><td><code>?name=ra</code></td><td>Mira Okafor, Priya Raman</td><td><code>[]</code></td></tr>
+<tr><td><code>?name=elena</code></td><td>Elena Vasquez</td><td><code>[]</code></td></tr>
+<tr><td><code>?name=%20ELENA%20VASQUEZ</code></td><td>Elena Vasquez</td><td>Elena Vasquez</td></tr>
+<tr><td><code>?name=Jos%C3%A9</code></td><td>200</td><td>400</td></tr>
+</table></div>
+<p><code>rank</code>, <code>dutyTitle</code> and the response shape are unchanged.</p>
+
+<h2>POST /Person</h2>
 <pre><code>POST /Person
-Content-Type: application/json        (charset allowed; body at most 4096 bytes)
-
+Content-Type: application/json        (at most 4096 bytes)
 { "name": "Ada Lovelace" }            (unknown properties ignored)</code></pre>
-<p>Validation uses the shared rule from 002, unchanged. The name is checked against an 800-character bound as sent, then NFC-normalised and trimmed, and then must be 1 to 100 characters of letters (each followed by at most 3 combining marks), digits, space, <code>.</code>, <code>'</code> and <code>-</code>, with none of the 28 invisible code points.</p>
-
-<h2>Responses</h2>
 <div class="table-wrap"><table>
 <tr><th>Status</th><th>When</th><th>Body</th></tr>
-<tr><td>201</td><td>Created</td><td><code>{ "id": 7, "success": true, "message": "Successful", "responseCode": 201 }</code>, exactly these four keys, plus the header <code>Location: /Person?name=Ada%20Lovelace</code></td></tr>
-<tr><td>400</td><td>The body is empty, not an object (including a bare string), or malformed; <code>name</code> is missing, null or not a string; or it fails the name rule</td><td><code>ValidationProblemDetails</code>, never echoing the input</td></tr>
-<tr><td>409</td><td>The name is taken, ignoring ASCII case and surrounding whitespace, after NFC. This covers both the pre-check and a concurrent create rejected by the unique index</td><td><code>{ "id": null, "success": false, "message": "A person with this name already exists", "responseCode": 409 }</code>, no <code>Location</code></td></tr>
-<tr><td>413</td><td>Body over 4096 bytes (on Kestrel)</td><td>Unspecified; key on the status</td></tr>
-<tr><td>415</td><td>The Content-Type is not JSON (empty body), or there is no Content-Type at all (ProblemDetails)</td><td>Key on the status</td></tr>
-<tr><td>500</td><td>An unexpected fault</td><td>Empty in Production; the developer page in Development only</td></tr>
+<tr><td>201</td><td>Created</td><td><code>{ "id": 7, "success": true, "message": "Successful", "responseCode": 201 }</code> plus <code>Location: /Person?name=Ada%20Lovelace</code>. A GET of it returns exactly this person.</td></tr>
+<tr><td>400</td><td>The body is empty, not an object (including a bare string) or malformed; <code>name</code> is missing, null or not a string; or the name rule fails</td><td><code>ValidationProblemDetails</code>, which never echoes the input</td></tr>
+<tr><td>409</td><td>The name is taken (ignoring ASCII case and surrounding whitespace). This comes from the pre-check or from the unique index during a concurrent create</td><td><code>{ "id": null, "success": false, "message": "A person with this name already exists", "responseCode": 409 }</code>, with no <code>Location</code></td></tr>
+<tr><td>413</td><td>Body over 4096 bytes (Kestrel)</td><td>Unspecified</td></tr>
+<tr><td>415</td><td>Content-Type is not JSON (empty body), or there is no Content-Type (ProblemDetails)</td><td>Key on the status only</td></tr>
+<tr><td>500</td><td>Unexpected fault</td><td>Empty in Production; the developer page in Development</td></tr>
 </table></div>
-<p>Checks run in this order: 415 and 413 first, then 400, then 409. A successful create of a name that is then posted again returns 409; the endpoint is not idempotent.</p>
-
-<h2>Location header <span class="tag warn">differs from the task decision</span></h2>
-<ul>
-<li><strong>Value</strong>: <code>/Person?name=</code> followed by the <em>stored</em> name, encoded with <code>Uri.EscapeDataString</code> (relative and ASCII-only). Example: <code>Zoë O'Brien</code> gives <code>/Person?name=Zo%C3%AB%20O%27Brien</code>.</li>
-<li><strong>Why not <code>/Person/{name}</code></strong>: task 008 removes that route, after which the header would point at a 404. <code>GET /Person?name=</code> works today (contains match) and after 008 (exact match).</li>
-<li><strong>Why the encoding is required</strong>: a probe showed that Kestrel answers 500 for a non-ASCII header, after the row is already stored.</li>
-<li>The UI does not read <code>Location</code>.</li>
-</ul>
+<p>Order of checks: 415 or 413, then 400, then 409. <code>Location</code> is <code>"/Person?name=" + Uri.EscapeDataString(stored name)</code>, for example <code>/Person?name=Aoife%20O%27Brien%20Jr.</code>.</p>
 
 <h2>UI client</h2>
 <pre><code>createPerson(name: string): Observable&lt;CreatePersonOutcome&gt;
   // POST /api/Person { name }  (name unmodified)
-  // 201 with id &gt;= 1        -&gt; { status: 'created', id }
-  // 201 with a bad id       -&gt; error 'Malformed create response'
-  // 409                     -&gt; { status: 'conflict' }
-  // 400                     -&gt; { status: 'invalid', errors }
-  // anything else           -&gt; HttpErrorResponse propagates</code></pre>
-<p>New types in <code>models.ts</code>: <code>CreatePersonRequest { name: string }</code>, <code>CreatePersonResult extends BaseResponse { id: number | null }</code>, <code>CreatePersonOutcome</code>.</p>
+  // 201, id &gt;= 1     -&gt; { status: 'created', id }
+  // 201, bad id      -&gt; error 'Malformed create response'
+  // 409 -&gt; { status: 'conflict' }    400 -&gt; { status: 'invalid', errors }    other -&gt; HttpErrorResponse</code></pre>
 
 <h2>Domain rules</h2>
 <ul>
-<li><strong>Rule 1</strong>: names are normalised (NFC and trim), then the handler runs a NOCASE pre-check. The existing unique index <code>IX_Person_Name</code> is the guarantee, and a lost race maps to 409. Parallel creates of the same name give exactly one 201.</li>
-<li><strong>Rule 2</strong>: only a <code>Person</code> row is inserted. <code>AstronautDetail</code> and <code>AstronautDuty</code> are untouched, and tests compare dumps of both. The new person lists with <code>""</code> rank and title and <code>null</code> dates.</li>
+<li><strong>Rule 1</strong>: names are ASCII and trimmed, there is a NOCASE pre-check, and the existing unique index <code>IX_Person_Name</code> is the guarantee (a lost race is 409). Lookup by name is exact.</li>
+<li><strong>Rule 2</strong>: create inserts only a <code>Person</code>. Tests compare the astronaut tables before and after.</li>
 </ul>
 
 <h2>Removed</h2>
 <ul>
-<li><code>CreatePersonPreProcessor</code> (never registered, so dead code). The duplicate check now lives only in the handler, as for PUT.</li>
-<li>The POST action's <code>try/catch</code>, which returned <code>ex.Message</code>.</li>
+<li>From <code>InputRules</code>:
+  <ul>
+    <li>NFC normalisation</li>
+    <li>the 28 invisible code points</li>
+    <li>the combining-mark limit</li>
+    <li><code>MaxRawLength</code></li>
+  </ul></li>
+<li>From <code>GetPeople</code>: <code>LIKE</code>, <code>ESCAPE</code> and <code>EscapeLike</code>.</li>
+<li><code>CreatePersonPreProcessor</code> (dead code).</li>
+<li>The POST <code>try/catch</code> that returned <code>ex.Message</code>.</li>
 </ul>
+<p>The applied migration <code>AddUniquePersonNameIndex</code> is not touched.</p>
 
-<h2>Open questions (answer when approving)</h2>
+<h2>Open question (answer when approving)</h2>
 <ol>
-<li><strong><code>Location</code> target.</strong> <em>Recommended</em>: <code>/Person?name=</code>, as this contract is written. The alternative is to keep <code>/Person/{name}</code> and make task 008 rewrite it.</li>
-<li><strong>Compatibility characters and look-alikes</strong> (<code>Ａｄａ</code>, <code>ﬁ</code>, Cyrillic <code>а</code>) remain distinct, valid names; this rule is not changed here. <em>Recommended</em>: accept for 006, and decide on a separate hardening task (a comparison key column with NFKC and full case folding) versus accepting the limit.</li>
-<li><strong>500 body.</strong> It is empty rather than a "generic message". <em>Recommended</em>: accept, and add a global ProblemDetails exception handler as its own task.</li>
+<li><strong>Existing non-ASCII names in a database.</strong> They remain, are listed, and can be renamed by id, but they cannot be looked up by name. <em>Recommended</em>: no data migration and no database CHECK constraint, because the API is pre-release and development databases reseed with ASCII names.</li>
 </ol>
 
 <h2>Files</h2>
 <ul>
-<li><a href="openapi.yaml">openapi.yaml</a>: endpoint, schemas, status codes</li>
-<li><a href="data.md">data.md</a>: no schema change; C# shapes, handler steps, controller, rule enforcement, README text</li>
-<li><a href="types.ts">types.ts</a>: exact UI types and <code>createPerson</code> semantics</li>
-<li><a href="tests.md">tests.md</a>: H (handler), P (HTTP), K (Kestrel), U (UI), and mutation targets</li>
+<li><a href="openapi.yaml">openapi.yaml</a>: <code>NameRule</code>, plus the four endpoints</li>
+<li><a href="data.md">data.md</a>: exact C# for the rule, the filter and POST; rule enforcement; README text</li>
+<li><a href="types.ts">types.ts</a>: UI types (unchanged except comments)</li>
+<li><a href="tests.md">tests.md</a>: existing tests to delete, rewrite or keep (section A), new tests C1-C4, and mutation targets</li>
 </ul>
 </main>
 </body>

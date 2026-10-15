@@ -1,7 +1,7 @@
 ---
 id: 006
 title: Make POST /Person a proper, validated create endpoint
-status: approved   # draft | ready | planned | approved | in-progress | done | blocked
+status: in-progress   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]   # api | ui | infra | db
 ---
 

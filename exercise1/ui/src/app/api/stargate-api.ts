@@ -7,6 +7,7 @@ import {
   CreatePersonRequest,
   CreatePersonResult,
   GetAstronautDutiesByNameResult,
+  GetDutiesOutcome,
   GetPeopleResult,
   GetPersonByNameResult,
   PersonAstronaut,
@@ -57,10 +58,43 @@ export class StargateApi {
       );
   }
 
-  getDuties(name: string): Observable<GetAstronautDutiesByNameResult> {
-    return this.http.get<GetAstronautDutiesByNameResult>(
-      `${this.baseUrl}/AstronautDuty/${encodeURIComponent(name)}`,
-    );
+  /**
+   * Loads a person's duties. Sends GET /api/AstronautDuty?name=<name> with the name unmodified (the server trims and
+   * validates; an empty name is still sent). 404 and 400 are emitted as outcomes; a 200 without a person object or
+   * an astronautDuties array errors with 'Malformed duties response'; every other failure propagates unchanged.
+   */
+  getDuties(name: string): Observable<GetDutiesOutcome> {
+    const params = new HttpParams().set('name', name);
+    return this.http
+      .get<GetAstronautDutiesByNameResult>(`${this.baseUrl}/AstronautDuty`, { params })
+      .pipe(
+        map((result): GetDutiesOutcome => {
+          const person: unknown = result?.person;
+          const duties: unknown = result?.astronautDuties;
+          if (typeof person !== 'object' || person === null || !Array.isArray(duties)) {
+            throw new Error('Malformed duties response');
+          }
+          return {
+            status: 'found',
+            person: result.person as PersonAstronaut,
+            astronautDuties: result.astronautDuties,
+          };
+        }),
+        catchError((error: unknown) => {
+          if (error instanceof HttpErrorResponse) {
+            switch (error.status) {
+              case 404:
+                return of<GetDutiesOutcome>({ status: 'notFound' });
+              case 400:
+                return of<GetDutiesOutcome>({
+                  status: 'invalid',
+                  errors: extractErrors(error.error),
+                });
+            }
+          }
+          return throwError(() => error);
+        }),
+      );
   }
 
   /**

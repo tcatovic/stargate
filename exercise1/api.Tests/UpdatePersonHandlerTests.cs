@@ -250,6 +250,8 @@ public class UpdatePersonHandlerTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("Ada\u3164")]
+    [InlineData("Ada\u180E")]
+    [InlineData("\u180EAda")]
     public async Task H13_AnInvalidNamePassedDirectly_ThrowsArgumentException_AndChangesNothing(string name)
     {
         using var db = SeededDatabase();

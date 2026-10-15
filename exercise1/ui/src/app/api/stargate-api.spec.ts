@@ -9,8 +9,8 @@ import {
   GetAstronautDutiesByNameResult,
   GetDutiesOutcome,
   GetPeopleResult,
-  GetPersonByNameResult,
   PersonAstronaut,
+  PersonFilters,
   UpdatePersonOutcome,
   UpdatePersonResult,
   ValidationProblemDetails,
@@ -114,97 +114,45 @@ describe('StargateApi', () => {
       expect(error).toBeInstanceOf(HttpErrorResponse);
       expect((error as HttpErrorResponse).status).toBe(400);
     });
-  });
 
-  describe('getPerson', () => {
-    it('U8 returns the person on 200', () => {
-      let person: PersonAstronaut | null | undefined;
-      api.getPerson('Mira Okafor').subscribe((p) => (person = p));
-      const body: GetPersonByNameResult = {
-        success: true,
-        message: 'Successful',
-        responseCode: 200,
-        person: mira,
-      };
-      http.expectOne('/api/Person/Mira%20Okafor').flush(body);
-      expect(person).toEqual(mira);
+    it('UI-1 looks a person up by exact name and emits the body unchanged', () => {
+      let result: GetPeopleResult | undefined;
+      const body = peopleBody([mira]);
+      api.listPeople({ name: 'Elena Vasquez' }).subscribe((r) => (result = r));
+      const req = http.expectOne((r) => r.url === '/api/Person');
+      expect(req.request.method).toBe('GET');
+      expect(req.request.urlWithParams).toBe('/api/Person?name=Elena%20Vasquez');
+      req.flush(body);
+      expect(result).toEqual(body);
     });
 
-    it('U9 maps 404 to null without an error', () => {
-      let person: PersonAstronaut | null | undefined;
-      let completed = false;
+    it('UI-2 emits an empty people list for an unknown name without an error', () => {
+      let result: GetPeopleResult | undefined;
       let failed = false;
-      api.getPerson('Nobody').subscribe({
-        next: (p) => (person = p),
+      api.listPeople({ name: 'Nobody' }).subscribe({
+        next: (r) => (result = r),
         error: () => (failed = true),
-        complete: () => (completed = true),
       });
-      const body: GetPersonByNameResult = {
-        success: false,
-        message: 'Person not found',
-        responseCode: 404,
-        person: null,
-      };
-      http.expectOne('/api/Person/Nobody').flush(body, { status: 404, statusText: 'Not Found' });
-      expect(person).toBeNull();
-      expect(completed).toBe(true);
+      http
+        .expectOne('/api/Person?name=Nobody')
+        .flush({ people: [], success: true, message: 'Successful', responseCode: 200 });
+      expect(result?.people).toEqual([]);
       expect(failed).toBe(false);
     });
 
-    it('U10 propagates a 400 with its problem details', () => {
-      let error: unknown;
-      api.getPerson("x' OR '1'='1").subscribe({ error: (e: unknown) => (error = e) });
-      http
-        .expectOne("/api/Person/x'%20OR%20'1'%3D'1")
-        .flush(problem('name'), { status: 400, statusText: 'Bad Request' });
-      expect(error).toBeInstanceOf(HttpErrorResponse);
-      const err = error as HttpErrorResponse;
-      expect(err.status).toBe(400);
-      expect((err.error as ValidationProblemDetails).errors['name']).toBeDefined();
+    it('UI-4 PersonFilters has exactly the keys name, rank and dutyTitle', () => {
+      const keys: Array<keyof PersonFilters> = ['name', 'rank', 'dutyTitle'];
+      const all: Required<PersonFilters> = { name: 'a', rank: 'b', dutyTitle: 'c' };
+      api.listPeople(all).subscribe();
+      const req = http.expectOne((r) => r.url === '/api/Person');
+      expect([...req.request.params.keys()].sort()).toEqual([...keys].sort());
+      req.flush(peopleBody([]));
     });
+  });
 
-    it('U11 propagates a 500', () => {
-      let error: unknown;
-      api.getPerson('Mira Okafor').subscribe({ error: (e: unknown) => (error = e) });
-      http
-        .expectOne('/api/Person/Mira%20Okafor')
-        .flush('boom', { status: 500, statusText: 'Server Error' });
-      expect(error).toBeInstanceOf(HttpErrorResponse);
-      expect((error as HttpErrorResponse).status).toBe(500);
-    });
-
-    it('propagates a network failure (status 0)', () => {
-      let error: unknown;
-      api.getPerson('Mira Okafor').subscribe({ error: (e: unknown) => (error = e) });
-      http.expectOne('/api/Person/Mira%20Okafor').error(new ProgressEvent('error'));
-      expect(error).toBeInstanceOf(HttpErrorResponse);
-      expect((error as HttpErrorResponse).status).toBe(0);
-    });
-
-    it('U12 encodes reserved characters in the path', () => {
-      api.getPerson('a/b?c#d').subscribe();
-      http
-        .expectOne('/api/Person/a%2Fb%3Fc%23d')
-        .flush({}, { status: 404, statusText: 'Not Found' });
-    });
-
-    it('trims the name before requesting', () => {
-      api.getPerson('  Mira Okafor  ').subscribe();
-      http
-        .expectOne('/api/Person/Mira%20Okafor')
-        .flush({}, { status: 404, statusText: 'Not Found' });
-    });
-
-    it('U13 emits null without a request for a blank name', () => {
-      const seen: (PersonAstronaut | null)[] = [];
-      let completions = 0;
-      for (const name of ['   ', '']) {
-        api.getPerson(name).subscribe({ next: (p) => seen.push(p), complete: () => completions++ });
-      }
-      expect(seen).toEqual([null, null]);
-      expect(completions).toBe(2);
-      http.expectNone(() => true);
-    });
+  it('UI-3 StargateApi no longer has getPerson', () => {
+    expect('getPerson' in api).toBe(false);
+    expect((api as unknown as Record<string, unknown>)['getPerson']).toBeUndefined();
   });
 
   it('U14 getPeople requests exactly /api/Person', () => {

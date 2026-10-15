@@ -3,6 +3,8 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { TestBed } from '@angular/core/testing';
 
 import {
+  CreatePersonOutcome,
+  CreatePersonResult,
   GetPeopleResult,
   GetPersonByNameResult,
   PersonAstronaut,
@@ -325,6 +327,131 @@ describe('StargateApi', () => {
       expect(r.outcomes).toEqual([]);
       expect(r.errors[0]).toBeInstanceOf(Error);
       expect((r.errors[0] as Error).message).toBe('Malformed update response');
+    });
+  });
+
+  describe('createPerson', () => {
+    const created = (id: number | null): CreatePersonResult => ({
+      success: true,
+      message: 'Successful',
+      responseCode: 201,
+      id,
+    });
+
+    function run(name = 'Ada'): {
+      outcomes: CreatePersonOutcome[];
+      errors: unknown[];
+      completed: () => boolean;
+    } {
+      const outcomes: CreatePersonOutcome[] = [];
+      const errors: unknown[] = [];
+      let done = false;
+      api.createPerson(name).subscribe({
+        next: (o) => outcomes.push(o),
+        error: (e: unknown) => errors.push(e),
+        complete: () => (done = true),
+      });
+      return { outcomes, errors, completed: () => done };
+    }
+
+    it('U1 sends exactly one POST /api/Person with the unmodified name only', () => {
+      api.createPerson(' Ada ').subscribe();
+      const req = http.expectOne('/api/Person');
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body).toEqual({ name: ' Ada ' });
+      expect(Object.keys(req.request.body as object)).toEqual(['name']);
+      req.flush(created(7), { status: 201, statusText: 'Created' });
+    });
+
+    it('U2 still sends a POST for an empty name', () => {
+      api.createPerson('').subscribe();
+      const req = http.expectOne('/api/Person');
+      expect(req.request.method).toBe('POST');
+      expect(req.request.body).toEqual({ name: '' });
+      req.flush(created(7), { status: 201, statusText: 'Created' });
+    });
+
+    it('U3 emits created with the id once and completes', () => {
+      const r = run();
+      http.expectOne('/api/Person').flush(created(7), { status: 201, statusText: 'Created' });
+      expect(r.outcomes).toEqual([{ status: 'created', id: 7 }]);
+      expect(r.completed()).toBe(true);
+      expect(r.errors).toEqual([]);
+    });
+
+    it('U4 errors with Malformed create response for an invalid id', () => {
+      for (const id of [null, undefined, 0, -1, 1.5, '7']) {
+        const r = run();
+        const body =
+          id === undefined
+            ? { success: true, message: 'Successful', responseCode: 201 }
+            : created(id as number | null);
+        http.expectOne('/api/Person').flush(body, { status: 201, statusText: 'Created' });
+        expect(r.outcomes).toEqual([]);
+        expect(r.errors[0]).toBeInstanceOf(Error);
+        expect(r.errors[0]).not.toBeInstanceOf(HttpErrorResponse);
+        expect((r.errors[0] as Error).message).toBe('Malformed create response');
+      }
+    });
+
+    it('U4 errors with Malformed create response for a 201 with a null body', () => {
+      const r = run();
+      http.expectOne('/api/Person').flush(null, { status: 201, statusText: 'Created' });
+      expect((r.errors[0] as Error).message).toBe('Malformed create response');
+    });
+
+    it('U5 emits conflict for 409', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person')
+        .flush(
+          {
+            success: false,
+            message: 'A person with this name already exists',
+            responseCode: 409,
+            id: null,
+          },
+          { status: 409, statusText: 'Conflict' },
+        );
+      expect(r.outcomes).toEqual([{ status: 'conflict' }]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('U6 emits invalid with the body errors for 400', () => {
+      const r = run();
+      http
+        .expectOne('/api/Person')
+        .flush(problem('Name'), { status: 400, statusText: 'Bad Request' });
+      expect(r.outcomes).toEqual([{ status: 'invalid', errors: { Name: ['invalid'] } }]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('U7 emits invalid with empty errors for a null, string or errors-less 400 body', () => {
+      for (const body of [null, 'oops', {}, { errors: null }]) {
+        const r = run();
+        http.expectOne('/api/Person').flush(body, { status: 400, statusText: 'Bad Request' });
+        expect(r.outcomes).toEqual([{ status: 'invalid', errors: {} }]);
+        expect(r.completed()).toBe(true);
+      }
+    });
+
+    it('U8 propagates 415, 413, 500 and a network error as HttpErrorResponse', () => {
+      const cases: [number, string][] = [
+        [415, 'Unsupported Media Type'],
+        [413, 'Payload Too Large'],
+        [500, 'Server Error'],
+      ];
+      for (const [status, statusText] of cases) {
+        const r = run();
+        http.expectOne('/api/Person').flush('x', { status, statusText });
+        expect(r.outcomes).toEqual([]);
+        expect(r.errors[0]).toBeInstanceOf(HttpErrorResponse);
+        expect((r.errors[0] as HttpErrorResponse).status).toBe(status);
+      }
+      const network = run();
+      http.expectOne('/api/Person').error(new ProgressEvent('error'));
+      expect(network.errors[0]).toBeInstanceOf(HttpErrorResponse);
+      expect((network.errors[0] as HttpErrorResponse).status).toBe(0);
     });
   });
 });

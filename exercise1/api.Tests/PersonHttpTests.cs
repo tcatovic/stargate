@@ -263,8 +263,25 @@ public sealed class PersonHttpTests : IDisposable
         Assert.DoesNotContain("contains", description);
         foreach (var parameter in parameters.Values)
         {
-            Assert.Equal(@"^[A-Za-z0-9 .'-]+\z", parameter.GetProperty("schema").GetProperty("pattern").GetString());
+            Assert.Equal(@"^(?=[ .'-]*[A-Za-z0-9])[A-Za-z0-9 .'-]+\z", parameter.GetProperty("schema").GetProperty("pattern").GetString());
         }
+    }
+
+    [Theory]
+    [InlineData("name", "..")]
+    [InlineData("name", "'")]
+    [InlineData("rank", ".")]
+    [InlineData("dutyTitle", "-")]
+    public Task F6_APunctuationOnlyFilter_Is400(string parameter, string value) =>
+        AssertBadRequest($"/Person?{parameter}={Uri.EscapeDataString(value)}", parameter);
+
+    [Fact]
+    public async Task F7_ALetterAndPunctuationFilter_IsAccepted()
+    {
+        var (status, _, json) = await Get("/Person?name=a.");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal(0, json.GetProperty("people").GetArrayLength());
     }
 
     private static string[] ResponseCodes(JsonElement operation) =>

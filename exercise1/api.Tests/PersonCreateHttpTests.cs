@@ -141,15 +141,7 @@ public sealed class PersonCreateHttpTests : IDisposable
 
         Assert.Equal(HttpStatusCode.BadRequest, reply.Status);
         Assert.Equal(400, reply.Json.GetProperty("status").GetInt32());
-        Assert.Contains(reply.Json.GetProperty("errors").EnumerateObject(), e => e.Name.Equals("name", StringComparison.OrdinalIgnoreCase));
-        using (var submitted = JsonDocument.Parse(body))
-        {
-            if (submitted.RootElement.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && name.GetString()!.Trim().Length > 0)
-            {
-                Assert.DoesNotContain(name.GetString()!, reply.Body, StringComparison.Ordinal);
-            }
-        }
-
+        ProblemAssert.NameRejected(reply.Json, body);
         Assert.Null(reply.Location);
         Assert.Equal(before, _db.Dump());
     }
@@ -189,6 +181,25 @@ public sealed class PersonCreateHttpTests : IDisposable
         var reply = await Send(HttpMethod.Post, "/Person", NameJson("Ada Lovelace"), contentType);
 
         Assert.Equal(HttpStatusCode.UnsupportedMediaType, reply.Status);
+        Assert.Equal(before, _db.Dump());
+    }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("{\"name\":4242}")]
+    [InlineData("\"Ada\"")]
+    [InlineData("{\"name\":\"Tokenxyz")]
+    [InlineData("{\"name\":")]
+    public async Task M1_MalformedJson_Is400_WithoutParserInternals(string body)
+    {
+        var before = _db.Dump();
+
+        var reply = await Send(HttpMethod.Post, "/Person", body);
+
+        Assert.Equal(HttpStatusCode.BadRequest, reply.Status);
+        Assert.Equal(400, reply.Json.GetProperty("status").GetInt32());
+        Assert.NotEmpty(reply.Json.GetProperty("errors").EnumerateObject());
+        ProblemAssert.NoParserInternals(reply.Json);
         Assert.Equal(before, _db.Dump());
     }
 
@@ -337,6 +348,37 @@ public sealed class PersonCreateHttpTests : IDisposable
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerEndDate").ValueKind);
     }
 
+    [Fact]
+    public async Task P18_TheHundredCharacterBoundary_IsMeasuredAfterTrimming()
+    {
+        var hundred = new string('a', 100);
+
+        var exact = await Post(hundred);
+        var padded = await Post(" " + new string('b', 100) + " ");
+        var over = await Post(new string('c', 101));
+
+        Assert.Equal(HttpStatusCode.Created, exact.Status);
+        Assert.Equal(HttpStatusCode.Created, padded.Status);
+        Assert.Equal(100, _db.Scalar<long>($"SELECT LENGTH(\"Name\") FROM \"Person\" WHERE \"Id\" = {padded.Json.GetProperty("id").GetInt32()}"));
+        Assert.Equal(HttpStatusCode.BadRequest, over.Status);
+        Assert.Equal(8, PersonCount());
+    }
+
+    [Theory]
+    [InlineData("a.", true)]
+    [InlineData("O'Brien", true)]
+    [InlineData("A-1", true)]
+    [InlineData("..", false)]
+    [InlineData("'", false)]
+    [InlineData(". -", false)]
+    public async Task P19_ANameNeedsALetterOrDigit(string name, bool accepted)
+    {
+        var reply = await Post(name);
+
+        Assert.Equal(accepted ? HttpStatusCode.Created : HttpStatusCode.BadRequest, reply.Status);
+        Assert.Equal(accepted ? 7 : 6, PersonCount());
+    }
+
     [Theory]
     [MemberData(nameof(NonAsciiNames.Data), MemberType = typeof(NonAsciiNames))]
     public async Task X1_NonAsciiNames_Are400_OnPost_WithoutEcho_AndStoreNothing(string value)
@@ -346,8 +388,8 @@ public sealed class PersonCreateHttpTests : IDisposable
         var reply = await Post(value);
 
         Assert.Equal(HttpStatusCode.BadRequest, reply.Status);
-        Assert.DoesNotContain(value, reply.Body, StringComparison.Ordinal);
-        Assert.DoesNotContain(Uri.EscapeDataString(value), reply.Body, StringComparison.Ordinal);
+        ProblemAssert.HasOnlyNameError(reply.Json, "name", ProblemAssert.NameRuleMessage);
+        ProblemAssert.NothingDecodedContains(reply.Json, value, Uri.EscapeDataString(value));
         Assert.Null(reply.Location);
         Assert.Equal(before, _db.Dump());
     }

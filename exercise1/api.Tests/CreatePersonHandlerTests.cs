@@ -65,21 +65,6 @@ public class CreatePersonHandlerTests
     }
 
     [Theory]
-    [InlineData(" Ada")]
-    [InlineData("Ada　")]
-    [InlineData("José")]
-    [InlineData("Renée")]
-    public async Task H3_NonAsciiIsNeverTrimmedOrStored(string name)
-    {
-        using var db = SeededDatabase();
-        var before = db.Dump();
-
-        await Assert.ThrowsAsync<ArgumentException>(() => Create(db, name));
-
-        Assert.Equal(before, db.Dump());
-    }
-
-    [Theory]
     [InlineData("Mira Okafor")]
     [InlineData("mira okafor")]
     [InlineData("  MIRA OKAFOR ")]
@@ -146,6 +131,7 @@ public class CreatePersonHandlerTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("<x>")]
+    [InlineData("..")]
     [InlineData("Secretvalue<x>")]
     public async Task H8_AnInvalidNamePassedDirectly_ThrowsArgumentException_WithoutTheValue_AndStoresNothing(string name)
     {

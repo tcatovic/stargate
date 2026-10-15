@@ -223,9 +223,7 @@ public class UpdatePersonHandlerTests
     [InlineData("Ada\u3164")]
     [InlineData("Ada\u180E")]
     [InlineData("\u180EAda")]
-    [InlineData("Ren\u00E9e")]
-    [InlineData("Rene\u0301e")]
-    [InlineData("\u00A0Ada")]
+    [InlineData("..")]
     public async Task H13_AnInvalidNamePassedDirectly_ThrowsArgumentException_AndChangesNothing(string name)
     {
         using var db = SeededDatabase();

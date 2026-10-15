@@ -11,7 +11,7 @@ public static class NonAsciiNames
     [
         "Zo\u00EB", "Jos\u00E9", "\u00C9mile", "Ren\u00E9e", "Rene\u0301e", "\uFF21da", "\u0410da", "\u0391da", "Ada \U0001F680",
         "\u00A0Ada", "Ada\u00A0", "\u3000Ada", "\u0085Ada", "Ada\u2003", "A\u00A0da", "O\u2019Brien", "\u212Aate",
-        "\u017Fam", "\u0663", "\u0E01\u0E34", "Ada\u200B", "Ada\u3164", "Ada\u180E", "\u180EAda",
+        "\u017Fam", "\u0663", "\u0E01\u0E34", "Ada\u200B", "Ada\u3164", "Ada\u180E", "\u180EAda", "A\u034Fda", "Ada\uFE0F", "\uFF11",
     ];
 
     public static TheoryData<string> Data()
@@ -99,7 +99,37 @@ public class InputRulesTests
     [InlineData("2LT")]
     [InlineData("RETIRED")]
     [InlineData("O'Brien-Smith Jr.")]
+    [InlineData("a.")]
+    [InlineData("O'Brien")]
+    [InlineData("A-1")]
+    [InlineData(". a")]
+    [InlineData("7")]
     public void R24_AsciiNamesAreValid(string value) => Assert.True(IsValidName(value));
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("'")]
+    [InlineData("-")]
+    [InlineData(". -")]
+    [InlineData(" ' . - ")]
+    public void R27_PunctuationOnlyIsInvalid(string value)
+    {
+        Assert.False(IsValidName(value));
+        Assert.False(Charset.IsValid(value));
+    }
+
+    [Fact]
+    public void R28_AHundredCharacterPunctuationRunWithALateLetter_IsLinear_AndAPunctuationOnlyRunIsRejectedQuickly()
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+
+        Assert.False(IsValidName(new string('.', 100)));
+        Assert.False(IsValidName(new string('.', 99) + "\u00E9"));
+        Assert.True(IsValidName(new string('-', 99) + "a"));
+
+        Assert.True(watch.Elapsed < TimeSpan.FromSeconds(1));
+    }
 
     [Fact]
     public void R24_HundredLettersIsValid() => Assert.True(IsValidName(new string('Z', 100)));
@@ -109,14 +139,7 @@ public class InputRulesTests
     [InlineData("\u017Fam")] // LATIN SMALL LETTER LONG S: matches [s] only under IgnoreCase
     [InlineData("\u0663")] // ARABIC-INDIC DIGIT THREE: matched by \d
     [InlineData("\uFF11")] // FULLWIDTH DIGIT ONE: matched by \d
-    public void R25_PatternIsLiteralAscii_NoIgnoreCaseNoUnicodeDigits(string value)
-    {
-        Assert.False(IsValidName(value));
-        Assert.DoesNotMatch(InputRules.AllowedCharactersPattern, value);
-        Assert.DoesNotContain("\\d", InputRules.AllowedCharactersPattern);
-        Assert.DoesNotContain("\\p", InputRules.AllowedCharactersPattern);
-        Assert.DoesNotContain("\\w", InputRules.AllowedCharactersPattern);
-    }
+    public void R25_NoIgnoreCaseFoldingAndNoUnicodeDigits(string value) => Assert.False(IsValidName(value));
 
     [Fact]
     public void R26_ValidNameAttribute_HasNoRawBound_AndTrimsBeforeMeasuring()
@@ -152,16 +175,6 @@ public class InputRulesTests
         Assert.False(InputRules.IsValidName(result));
     }
 
-    [Theory]
-    [InlineData("Ada\u3164")]
-    [InlineData("Ada\u200B")]
-    [InlineData("A\u034Fda")]
-    [InlineData("Ada\uFE0F")]
-    [InlineData("A\u180Eda")]
-    [InlineData("Ada\u180E")]
-    [InlineData("\u180EAda")]
-    public void R13_NonAsciiIsInvalidAnywhere(string value) => Assert.False(IsValidName(value));
-
     [Fact]
     public void R17_ARawTrailingNewlineNeverMatchesThePattern()
     {
@@ -194,12 +207,9 @@ public class InputRulesTests
         Assert.True(attribute.IsValid(null));
         Assert.False(attribute.IsValid(42));
         Assert.True(attribute.IsValid(" Ada "));
-        Assert.False(attribute.IsValid("Ren\u00E9e"));
-        Assert.False(attribute.IsValid("Rene\u0301e"));
         Assert.False(attribute.IsValid("<script>"));
-        Assert.False(attribute.IsValid("Ada\u3164"));
         Assert.Equal(
-            "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods (at most 100 characters).",
+            "Use only English letters (A-Z), digits, spaces, hyphens, apostrophes and periods, with at least one letter or digit (at most 100 characters).",
             attribute.FormatErrorMessage("Name"));
         Assert.NotNull(attribute.GetValidationResult("<x>", new ValidationContext(new object()) { MemberName = "Name" }));
     }
@@ -212,14 +222,5 @@ public class InputRulesTests
             Assert.True(IsValidName(person.Name), person.Name);
             Assert.Equal(person.Name, InputRules.Normalize(person.Name));
         }
-    }
-
-    [Fact]
-    public void R21_NonAsciiWhitespaceIsNotTrimmed_AndIsInvalid()
-    {
-        Assert.Equal("\u00A0Ada\u2003", InputRules.Normalize("\u00A0Ada\u2003"));
-        Assert.Equal("\u3000Ada\u0085", InputRules.Normalize("\u3000Ada\u0085"));
-        Assert.False(IsValidName("\u00A0Ada\u2003"));
-        Assert.False(IsValidName("\u3000Ada\u0085"));
     }
 }

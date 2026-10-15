@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using StargateAPI.Business.Data;
@@ -61,16 +62,17 @@ public sealed class NameRuleHttpTests : IDisposable
 
         var requests = new[]
         {
-            await Send(HttpMethod.Get, "/Person?name=" + escaped),
-            await Send(HttpMethod.Get, "/Person/" + escaped),
-            await Send(HttpMethod.Put, $"/Person/{mira}", NameJson(value)),
+            ("name", await Send(HttpMethod.Get, "/Person?name=" + escaped)),
+            ("name", await Send(HttpMethod.Get, "/Person/" + escaped)),
+            ("Name", await Send(HttpMethod.Put, $"/Person/{mira}", NameJson(value))),
         };
 
-        foreach (var (status, body) in requests)
+        foreach (var (key, (status, body)) in requests)
         {
             Assert.Equal(HttpStatusCode.BadRequest, status);
-            Assert.DoesNotContain(value, body, StringComparison.Ordinal);
-            Assert.DoesNotContain(escaped, body, StringComparison.Ordinal);
+            using var document = JsonDocument.Parse(body);
+            ProblemAssert.HasOnlyNameError(document.RootElement, key, ProblemAssert.NameRuleMessage);
+            ProblemAssert.NothingDecodedContains(document.RootElement, value, escaped);
         }
 
         Assert.Equal(before, _db.Dump());

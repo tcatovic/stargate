@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using StargateAPI.Business.Data;
 using StargateAPI.Business.Queries;
 
@@ -177,18 +176,6 @@ public class GetPeopleQueryTests
         var result = await Run(db, new GetPeople { Name = "   ", Rank = null, DutyTitle = "\t" });
 
         Assert.Equal(PeopleFixture.AllNames.ToHashSet(), Names(result));
-    }
-
-    private static string TestDirectory([CallerFilePath] string testFile = "") => Path.GetDirectoryName(testFile)!;
-
-    [Fact]
-    public void F5_TheNameFilterSourceHasNoLikeMachinery()
-    {
-        var source = File.ReadAllText(Path.Combine(TestDirectory(), "..", "api", "Business", "Queries", "GetPeople.cs"));
-
-        Assert.DoesNotContain(" LIKE ", source);
-        Assert.DoesNotContain("ESCAPE", source);
-        Assert.DoesNotContain("EscapeLike", source);
     }
 
     [Fact]

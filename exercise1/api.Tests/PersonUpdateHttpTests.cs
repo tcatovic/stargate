@@ -96,8 +96,8 @@ public sealed class PersonUpdateHttpTests : IDisposable
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerStartDate").ValueKind);
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerEndDate").ValueKind);
 
-        var (_, _, list) = await Get("/Person?name=Lindqvist");
-        Assert.Contains("Mira Okafor-Lindqvist", Names(list));
+        var (_, _, list) = await Get("/Person?name=mira%20okafor-lindqvist");
+        Assert.Equal(new[] { "Mira Okafor-Lindqvist" }, Names(list));
     }
 
     [Fact]

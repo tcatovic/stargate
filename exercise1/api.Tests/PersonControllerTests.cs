@@ -45,11 +45,11 @@ public class PersonControllerTests
         using var db = PeopleFixture.Create();
 
         var byName = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
-            await WithController(db, c => c.GetPeople("ra", null, null, CancellationToken.None))).Value);
+            await WithController(db, c => c.GetPeople("priya raman", null, null, CancellationToken.None))).Value);
         var combined = Assert.IsType<GetPeopleResult>(Assert.IsType<ObjectResult>(
             await WithController(db, c => c.GetPeople(null, "maj", "commander", CancellationToken.None))).Value);
 
-        Assert.Equal(new[] { "Mira Okafor", "Priya Raman" }.ToHashSet(), byName.People.Select(p => p.Name).ToHashSet());
+        Assert.Equal(["Priya Raman"], byName.People.Select(p => p.Name));
         Assert.Equal(["Elena Vasquez"], combined.People.Select(p => p.Name));
     }
 

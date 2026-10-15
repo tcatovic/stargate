@@ -9,7 +9,7 @@ namespace StargateAPI.Business.Queries
 {
     public class GetPeople : IRequest<GetPeopleResult>
     {
-        /// <summary>Case-insensitive contains match; null, empty or whitespace means no filter.</summary>
+        /// <summary>Case-insensitive exact match on the full name; null, empty or whitespace means no filter.</summary>
         public string? Name { get; init; }
 
         /// <summary>Case-insensitive exact match on the current rank; null, empty or whitespace means no filter.</summary>
@@ -21,13 +21,14 @@ namespace StargateAPI.Business.Queries
 
     public class GetPeopleHandler : IRequestHandler<GetPeople, GetPeopleResult>
     {
-        // Static text: filter values only ever travel as parameters. NULL = no filter. Rank and duty title compare
-        // against the LEFT JOINed columns, so people without an AstronautDetail (rule 2) never match those filters.
+        // Static text: filter values only ever travel as parameters. NULL = no filter. All three filters are
+        // case-insensitive (ASCII, NOCASE) exact matches. Rank and duty title compare against the LEFT JOINed columns,
+        // so people without an AstronautDetail (rule 2) never match those filters.
         private const string Sql = """
             SELECT a.Id AS PersonId, a.Name, b.CurrentRank, b.CurrentDutyTitle, b.CareerStartDate, b.CareerEndDate
             FROM [Person] a
             LEFT JOIN [AstronautDetail] b ON b.PersonId = a.Id
-            WHERE (@NamePattern IS NULL OR a.Name LIKE @NamePattern ESCAPE '\')
+            WHERE (@Name IS NULL OR a.Name = @Name COLLATE NOCASE)
               AND (@Rank IS NULL OR b.CurrentRank = @Rank COLLATE NOCASE)
               AND (@DutyTitle IS NULL OR b.CurrentDutyTitle = @DutyTitle COLLATE NOCASE)
             """;
@@ -41,10 +42,9 @@ namespace StargateAPI.Business.Queries
         {
             var result = new GetPeopleResult();
 
-            var name = Normalize(request.Name);
             var parameters = new
             {
-                NamePattern = name is null ? null : "%" + EscapeLike(name) + "%",
+                Name = Normalize(request.Name),
                 Rank = Normalize(request.Rank),
                 DutyTitle = Normalize(request.DutyTitle),
             };
@@ -58,10 +58,6 @@ namespace StargateAPI.Business.Queries
         }
 
         private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : InputRules.Normalize(value);
-
-        // Backslash first, so the escapes added for % and _ are not escaped again.
-        private static string EscapeLike(string value) =>
-            value.Replace(@"\", @"\\").Replace("%", @"\%").Replace("_", @"\_");
     }
 
     public class GetPeopleResult : BaseResponse

@@ -121,4 +121,19 @@ public class GetAstronautDutiesByNameHandlerTests
 
         Assert.Equal(["Second Inserted", "First Inserted"], result.AstronautDuties.Select(d => d.DutyTitle).ToArray());
     }
+
+    [Fact]
+    public async Task H8_TheCaseInsensitiveMatch_DoesNotDependOnTheColumnCollation()
+    {
+        // Before AddUniquePersonNameIndex the Person.Name column has no NOCASE collation; the query must still fold case itself.
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.MakeCareerStartDateRequired);
+        Assert.DoesNotContain("NOCASE", db.Scalar<string>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'Person'"));
+        db.Execute("INSERT INTO \"Person\" (\"Name\") VALUES ('Elena Vasquez')");
+
+        var result = await Get(db, "elena VASQUEZ");
+
+        Assert.Equal(200, result.ResponseCode);
+        Assert.Equal("Elena Vasquez", result.Person?.Name);
+    }
 }

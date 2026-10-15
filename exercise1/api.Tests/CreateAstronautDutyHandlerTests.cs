@@ -314,4 +314,19 @@ public class CreateAstronautDutyHandlerTests
         Assert.Equal(201, result.ResponseCode);
         Assert.Equal("CPT|RETIRED|2021-06-14 00:00:00|2024-12-31 00:00:00", DetailRow(db, 3));
     }
+
+    [Fact]
+    public async Task CH17_TheCaseInsensitiveMatch_DoesNotDependOnTheColumnCollation()
+    {
+        // Before AddUniquePersonNameIndex the Person.Name column has no NOCASE collation; the lookup must still fold case itself.
+        using var db = new TestDatabase();
+        db.Migrate(TestDatabase.MakeCareerStartDateRequired);
+        Assert.DoesNotContain("NOCASE", db.Scalar<string>("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'Person'"));
+        db.Execute("INSERT INTO \"Person\" (\"Name\") VALUES ('Kenji Watanabe')");
+
+        var result = await Create(db, " kenji WATANABE ", "CPT", "Pilot", new DateTime(2024, 1, 1));
+
+        Assert.Equal(201, result.ResponseCode);
+        Assert.Equal("Kenji Watanabe", result.Name);
+    }
 }

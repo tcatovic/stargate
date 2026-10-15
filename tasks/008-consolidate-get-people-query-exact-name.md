@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Replace GetPersonByName with one GetPeople query object and exact name match
-status: approved   # draft | ready | planned | approved | in-progress | done | blocked
+status: in-progress   # draft | ready | planned | approved | in-progress | done | blocked
 platforms: [api, ui]
 ---
 

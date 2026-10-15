@@ -65,12 +65,15 @@ public class PersonControllerTests
     private sealed class CapturingMediator : IMediator
     {
         public CancellationToken? Token { get; private set; }
+        public object? Request { get; private set; }
 
         public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)
         {
             Token = cancellationToken;
+            Request = request;
             object result = request switch
             {
+                GetPeople => new GetPeopleResult(),
                 CreatePerson => new CreatePersonResult { Id = 1, Name = "Ada", ResponseCode = 201 },
                 UpdatePerson => new UpdatePersonResult(),
                 _ => throw new NotSupportedException(),
@@ -113,6 +116,19 @@ public class PersonControllerTests
 
         await new PersonController(mediator).UpdatePerson(1, new UpdatePersonRequest { Name = "Ada" }, cts.Token);
 
+        Assert.Equal(cts.Token, mediator.Token);
+    }
+
+    [Fact]
+    public async Task C8_GetPeople_SendsTheVeryObjectItWasBound_WithTheRequestsToken()
+    {
+        using var cts = new CancellationTokenSource();
+        var mediator = new CapturingMediator();
+        var query = new GetPeople { Name = "a", Rank = "b", DutyTitle = "c" };
+
+        await new PersonController(mediator).GetPeople(query, cts.Token);
+
+        Assert.Same(query, mediator.Request);
         Assert.Equal(cts.Token, mediator.Token);
     }
 }

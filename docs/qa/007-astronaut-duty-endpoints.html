@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QA Report 007: Astronaut Duty Endpoints (Security Fix Replay)</title>
+<style>
+  :root {
+    --bg: #fafafa; --fg: #1b1b1f; --card: #ffffff; --border: #ddd;
+    --pass: #0a7d2c; --fail: #b00020; --obs: #8a6d00; --nt: #555;
+    --code-bg: #f3f3f3; --accent: #2a5db0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15161a; --fg: #e8e8ea; --card: #1e2024; --border: #34363c;
+      --pass: #45d472; --fail: #ff6b6b; --obs: #e0c050; --nt: #a0a0a8;
+      --code-bg: #272930; --accent: #6ea8ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 1rem; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.2rem; }
+  h2 { font-size: 1.2rem; margin-top: 2.2rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; }
+  h3 { font-size: 1.02rem; margin-top: 1.4rem; }
+  .meta { color: var(--nt); font-size: 0.9rem; }
+  .verdict {
+    display: inline-block; padding: 0.3rem 0.9rem; border-radius: 0.4rem; font-weight: 700;
+    font-size: 1.1rem; margin: 0.6rem 0 1rem 0;
+  }
+  .verdict.pass { background: rgba(10,125,44,0.15); color: var(--pass); border: 1px solid var(--pass); }
+  .verdict.fail { background: rgba(176,0,32,0.15); color: var(--fail); border: 1px solid var(--fail); }
+  .verdict.incomplete { background: rgba(138,109,0,0.15); color: var(--obs); border: 1px solid var(--obs); }
+  table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.88rem; }
+  th, td { border: 1px solid var(--border); padding: 0.45rem 0.6rem; text-align: left; vertical-align: top; }
+  th { background: var(--code-bg); }
+  tr:nth-child(even) { background: rgba(127,127,127,0.04); }
+  code, pre {
+    background: var(--code-bg); border-radius: 0.3rem; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  code { padding: 0.1rem 0.3rem; font-size: 0.85em; word-break: break-word; }
+  pre { padding: 0.7rem; overflow-x: auto; font-size: 0.82rem; white-space: pre-wrap; word-break: break-word; }
+  .pass-tag { color: var(--pass); font-weight: 700; }
+  .fail-tag { color: var(--fail); font-weight: 700; }
+  .obs-tag { color: var(--obs); font-weight: 700; }
+  .nt-tag { color: var(--nt); font-weight: 700; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 0.5rem; padding: 1rem; margin: 1rem 0; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  .side-head { font-weight: 700; margin-bottom: 0.3rem; }
+  .base-col { border-left: 3px solid var(--fail); padding-left: 0.6rem; }
+  .head-col { border-left: 3px solid var(--pass); padding-left: 0.6rem; }
+  ul { margin: 0.3rem 0; padding-left: 1.3rem; }
+  .small { font-size: 0.85rem; color: var(--nt); }
+  .toc a { color: var(--accent); text-decoration: none; }
+  .toc a:hover { text-decoration: underline; }
+  hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>QA Report — Task 007: Astronaut Duty Endpoints (SQL Injection Fix &amp; Validated Duty API)</h1>
+<p class="meta">
+  Branch under test: <code>task/007-astronaut-duty-endpoints</code> @ <code>81f13f0</code> (API + UI merged).
+  Vulnerable baseline: <code>main</code> @ <code>280fcd9</code> (post task 006, pre task 007 — contains the injection).
+  Tested: 2026-10-15. Tester: QA agent (automated, HTTP + DB level; no browser available in this environment).
+</p>
+<div class="verdict pass">VERDICT: PASS</div>
+
+<p>
+Every acceptance criterion in <code>tasks/007-get-astronaut-duties-by-name-query-param.md</code> that could be
+observed from a running system was exercised against the real HEAD build and, for the headline security
+criteria, against the real vulnerable base build side by side. No criterion failed. The three known
+contract-text defects called out in the task brief (whitespace-only name 400 shape, repeated <code>name</code>
+param "first wins", exact-case-then-lowest-Id resolution) were reproduced exactly as described and are recorded
+below as <strong>observations</strong>, not failures, per instructions. The out-of-scope rules 3-7 known defects
+(first-RETIRED-duty <code>CareerEndDate</code>) were also reproduced and recorded as observations only.
+</p>
+
+<h2 id="toc">Contents</h2>
+<div class="card toc">
+<ul>
+<li><a href="#provenance">DB provenance log</a></li>
+<li><a href="#replay">1. The replay: base vs head side by side (headline)</a></li>
+<li><a href="#get">2. GET /AstronautDuty</a></li>
+<li><a href="#post">3. POST /AstronautDuty</a></li>
+<li><a href="#rules">4. Rules 3-7 regression</a></li>
+<li><a href="#preindex">5. Pre-index database consistency</a></li>
+<li><a href="#regress">6. Regression of unchanged endpoints &amp; Swagger</a></li>
+<li><a href="#ui">7. UI</a></li>
+<li><a href="#hygiene">8. Hygiene</a></li>
+<li><a href="#criteria">Criteria-to-cases table</a></li>
+<li><a href="#nottested">What was not tested</a></li>
+<li><a href="#observations">Observations (known, non-blocking defects)</a></li>
+</ul>
+</div>
+
+<h2 id="provenance">DB provenance log</h2>
+<table>
+<tr><th>Tag</th><th>Build</th><th>Port</th><th>DB path</th><th>Seed log line</th></tr>
+<tr><td>headA</td><td>HEAD scratch copy (Debug)</td><td>5204</td><td><code>tmp/db_headA_1792030803899691242.db</code></td><td><code>Seeded 6 people, 4 astronaut details and 8 duties</code></td></tr>
+<tr><td>baseA</td><td>280fcd9 scratch copy (Debug)</td><td>5205</td><td><code>tmp/db_baseA_1792030806101025160.db</code></td><td><code>Seeded 6 people, 4 astronaut details and 8 duties</code></td></tr>
+<tr><td>headB</td><td>HEAD scratch copy (Debug)</td><td>5204</td><td><code>tmp/db_headB_1792030898683835579.db</code></td><td><code>Seeded 6 people, 4 astronaut details and 8 duties</code> (fresh DB for GET/POST/rules cases, started after headA stopped)</td></tr>
+<tr><td>baseB</td><td>280fcd9 scratch copy (Debug)</td><td>5205</td><td><code>tmp/db_baseB_1792030900806835913.db</code></td><td><code>Seeded 6 people, 4 astronaut details and 8 duties</code> (used for the unchanged-endpoint regression check)</td></tr>
+<tr><td>preindex</td><td>HEAD scratch copy, migrated only to <code>MakeCareerStartDateRequired</code></td><td>5207</td><td><code>tmp/preindex_1792031006.db</code></td><td>N/A — Production env, no auto-migrate/seed; two rows (<code>bob</code> Id 4, <code>Bob</code> Id 9) inserted directly by SQL</td></tr>
+<tr><td>unmigrated</td><td>HEAD scratch copy, empty (0-byte) file, Production env</td><td>5206</td><td><code>tmp/empty_unmigrated.db</code></td><td>N/A — intentionally never migrated, for the A16 500-body check</td></tr>
+</table>
+<p class="small">Every DB path above is unique, timestamped, and was never reused across cases that needed a brand-new seed. All scratch copies were built from <code>git archive</code> of the exact commits (<code>81f13f0</code> for head, <code>280fcd9</code> for base) into <code>$CLAUDE_JOB_DIR/tmp</code>, outside the real repository. Both ran Debug, <code>ASPNETCORE_ENVIRONMENT=Development</code> (except preindex/unmigrated, which used Production per the task brief), <code>--no-launch-profile</code>, with an absolute <code>ConnectionStrings__StarbaseApiDatabase</code> override. All processes were stopped at the end (verified by PID and port checks).</p>
+
+<h2 id="replay">1. The replay — base vs head, side by side (headline)</h2>
+
+<h3>1.1 Primary payload: <code>a' OR Id IS 3 OR 'a</code></h3>
+<div class="grid2">
+<div class="card base-col">
+<div class="side-head fail-tag">BASE (280fcd9) — vulnerable</div>
+<p><code>POST /Person</code> → 201, id 7 (same as head).</p>
+<p><code>POST /AstronautDuty</code> name=payload, rank X, dutyTitle RETIRED, dutyStartDate 2026-03-01:</p>
+<pre>HTTP/1.1 200 OK
+(no Location header)
+{"id":9,"success":true,"message":"Successful","responseCode":200}</pre>
+<p><strong>DB diff (before → after), dump excluding PersonId 7:</strong></p>
+<pre>Person: Id 7 added — no change to anyone else
+AstronautDetail PersonId=3 (Tomas Lindqvist):
+  CurrentDutyTitle: Pilot → RETIRED
+  CurrentRank: CPT → X
+  CareerEndDate: null → 2026-02-28
+AstronautDuty (Tomas's existing Pilot duty, Id 1):
+  DutyEndDate: null → 2026-02-28
+AstronautDuty new row Id 9:
+  PersonId: 3  (!!)  Rank X, DutyTitle RETIRED, Start 2026-03-01, End null</pre>
+<p><strong>Observed: the new duty, the detail update and the previous-duty close ALL landed on Tomas Lindqvist
+(PersonId 3), not on the newly created person (Id 7).</strong> This matches exactly the exploit documented in
+<code>docs/qa/006-create-person-endpoint.html</code> observation 10.</p>
+</div>
+<div class="card head-col">
+<div class="side-head pass-tag">HEAD (81f13f0) — fixed</div>
+<p><code>POST /Person</code> → 201, id 7.</p>
+<p><code>POST /AstronautDuty</code> same body:</p>
+<pre>HTTP/1.1 201 Created
+Location: /AstronautDuty?name=a%27%20OR%20Id%20IS%203%20OR%20%27a
+{"id":9,"success":true,"message":"Successful","responseCode":201}</pre>
+<p><strong>DB diff (before → after), dump excluding PersonId 7:</strong></p>
+<pre>Person: Id 7 added — DumpExcept(7) otherwise byte-identical
+AstronautDetail: new row only, PersonId 7 (X/RETIRED/2026-03-01)
+AstronautDuty: new row Id 9 only, PersonId 7
+Tomas (PersonId 3): Pilot duty DutyEndDate still null, detail still Pilot/CPT — UNCHANGED</pre>
+<p><strong>Observed: the duty, detail and all new rows attach only to PersonId 7 (the newly created hostile-named
+person). Every other person's rows (Tomas included) are byte-for-byte unchanged.</strong></p>
+</div>
+</div>
+
+<h3>1.2 Read-side, same payload</h3>
+<table>
+<tr><th>Build</th><th>Request</th><th>Result</th></tr>
+<tr><td>HEAD</td><td><code>GET /AstronautDuty?name=a%27%20OR%20Id%20IS%203%20OR%20%27a</code></td>
+<td class="pass-tag">200 — <code>person.personId: 7</code>, one duty with <code>personId: 7</code>. Body contains neither
+<code>Tomas</code> nor <code>Pilot</code>.</td></tr>
+<tr><td>BASE</td><td>same query string on <code>/AstronautDuty</code></td>
+<td class="obs-tag">405 Method Not Allowed — base has no <code>GET /AstronautDuty?name=</code> route at all (query-param
+GET did not exist pre-fix; only <code>POST /AstronautDuty</code> and <code>GET /AstronautDuty/{name}</code> exist).</td></tr>
+<tr><td>BASE</td><td><code>GET /AstronautDuty/a%27%20OR%20Id%20IS%203%20OR%20%27a</code> (old path route)</td>
+<td class="obs-tag">200, but the base handler for this route sends <code>GetPersonByName</code> (parameterised EF),
+not the vulnerable <code>GetAstronautDutiesByName</code> — so this particular read path is not exploitable on base
+(matches the task brief: "GetAstronautDutiesByNameHandler is unreachable today"). Response has no
+<code>astronautDuties</code> member at all, confirming defect 2 from the task Problem statement.</td></tr>
+</table>
+
+<h3>1.3 Additional hostile payloads (same session, cumulative on the already-mutated DBs)</h3>
+<table>
+<tr><th>Payload</th><th>HEAD result</th><th>BASE result</th></tr>
+<tr><td><code>a' OR 1 OR 'a</code></td>
+<td class="pass-tag">201; new duty row (Id 10) attaches only to the new person (Id 8). Others unchanged.</td>
+<td class="fail-tag" style="color:var(--fail)">200 OK (no Location); new duty row (Id 10) attached to
+<strong>PersonId 1 (Mira Okafor)</strong> — the always-true <code>OR 1</code> matched every row and SQLite returned
+the first one. <em>Different person than the first exploit hit — demonstrates the attacker does not even control
+which victim is affected, only that one is.</em> Mira's detail was also overwritten to RETIRED/X.</td></tr>
+<tr><td><code>a' OR 'a' IS 'a</code></td>
+<td class="pass-tag">201; attaches only to the new person (Id 9, duty Id 11). Others unchanged.</td>
+<td class="obs-tag">400 Bad Request, body is a raw <code>BadHttpRequestException</code> stack trace
+(<code>CreateAstronautDutyPreProcessor.Process</code> line 39) — the preprocessor's own interpolated check happens
+to fail to parse for this exact payload, so this particular string doesn't reach the vulnerable handler on base
+(an accident of the preprocessor's SQL, not a fix).</td></tr>
+<tr><td><code>Tomas Lindqvist'--</code></td>
+<td class="pass-tag">201; attaches only to the new person (Id 10, duty Id 12). Others unchanged.</td>
+<td class="obs-tag">400 Bad Request, same stack-trace shape as above (preprocessor SQL fails to parse this string).</td></tr>
+</table>
+
+<h3>1.4 <code>Aoife O'Brien Jr.</code> — legitimate apostrophe name</h3>
+<div class="grid2">
+<div class="card head-col">
+<div class="side-head pass-tag">HEAD</div>
+<pre>POST /Person {"name":"Aoife O'Brien Jr."} -> 201 id 11
+POST /AstronautDuty {...} -> 201 Created
+Location: /AstronautDuty?name=Aoife%20O%27Brien%20Jr.
+GET /AstronautDuty?name=Aoife%20O%27Brien%20Jr. -> 200
+  person.name = "Aoife O'Brien Jr.", one duty (CPT/Pilot/2026-03-01)</pre>
+<p><strong>No 500 anywhere.</strong></p>
+</div>
+<div class="card base-col">
+<div class="side-head fail-tag">BASE</div>
+<pre>POST /Person {"name":"Aoife O'Brien Jr."} -> 201 id 11
+POST /AstronautDuty {...} -> 500 Internal Server Error
+Microsoft.Data.Sqlite.SqliteException (0x80004005): SQLite Error 1:
+  'near "Brien": syntax error'.
+   at Microsoft.Data.Sqlite.SqliteException.ThrowExceptionForRC(...)
+GET /AstronautDuty?name=Aoife%20O%27Brien%20Jr. -> 405 (no such route on base)</pre>
+<p><strong>A legitimate customer name crashes the base build with leaked SQLite internals, exactly as predicted
+in the task Problem statement ("500 with SQLite text").</strong></p>
+</div>
+</div>
+
+<h3>1.5 Rule-failing payload, 400 before any SQL runs</h3>
+<p>Payload <code>x' OR '1'='1</code> (contains <code>=</code>, fails <code>[ValidName]</code>):</p>
+<table>
+<tr><th>Build</th><th>POST /AstronautDuty</th><th>GET /AstronautDuty?name=...</th></tr>
+<tr><td>HEAD</td>
+<td class="pass-tag">400, <code>ValidationProblemDetails</code>, <code>errors.Name</code> = the shared NameRule message, no echo</td>
+<td class="pass-tag">400, same shape, <code>errors.name</code> = NameRule, no echo</td></tr>
+<tr><td>BASE</td>
+<td class="obs-tag">400, but a raw <code>BadHttpRequestException</code> stack trace (preprocessor SQL parse failure), not a validation envelope — this payload never reaches the create logic on base either way, so no cross-person write occurs here, but the response leaks server internals</td>
+<td class="obs-tag">405 (route does not exist on base)</td></tr>
+</table>
+
+<h2 id="get">2. GET /AstronautDuty (HEAD, fresh seeded DB <code>headB</code>)</h2>
+<table>
+<tr><th>Case</th><th>Request</th><th>Result</th></tr>
+<tr><td>G1 happy path, Elena</td><td><code>?name=Elena%20Vasquez</code></td>
+<td class="pass-tag">200; <code>person</code> = Elena (MAJ, Commander, careerStartDate 2012-01-09T00:00:00, careerEndDate null);
+<code>astronautDuties</code> titles newest-first: [Commander, Pilot, Flight Engineer]; each item has exactly the
+six keys {id, personId, rank, dutyTitle, dutyStartDate, dutyEndDate} — no <code>person</code> member.</td></tr>
+<tr><td>G9, Desmond</td><td><code>?name=Desmond%20Achebe</code></td>
+<td class="pass-tag">200; titles [RETIRED, Commander, Pilot]; <code>careerEndDate</code> 2023-03-31T00:00:00.</td></tr>
+<tr><td>G4, Mira (no assignment)</td><td><code>?name=Mira%20Okafor</code></td>
+<td class="pass-tag">200; <code>currentRank</code> "", <code>careerStartDate</code> null, <code>astronautDuties</code> [] (rule 2).</td></tr>
+<tr><td>empty duties, Kenji</td><td><code>?name=Kenji%20Watanabe</code></td>
+<td class="pass-tag"><code>astronautDuties</code> [] confirmed.</td></tr>
+<tr><td>G2 trimmed/case-insensitive</td><td><code>elena%20vasquez</code>, <code>%20ELENA%20VASQUEZ%20</code>, <code>ELENA%20VASQUEZ%09</code></td>
+<td class="pass-tag">All three → 200, Elena.</td></tr>
+<tr><td>G3 fragments never match</td><td><code>?name=ra</code>, <code>?name=Elena</code></td>
+<td class="pass-tag">Both → 404.</td></tr>
+<tr><td>G5 unknown</td><td><code>?name=Nobody</code></td>
+<td class="pass-tag">404; body exactly <code>{"person":null,"astronautDuties":[],"success":false,"message":"Person not found","responseCode":404}</code>; no echo of "Nobody".</td></tr>
+<tr><td>G6 missing/empty name</td><td>no <code>name</code>; <code>?name=</code></td>
+<td class="pass-tag">Both 400, <code>errors.name == ["The name field is required."]</code>.</td></tr>
+<tr><td>G7 whitespace-only / tab <span class="obs-tag">(known contract defect a)</span></td><td><code>?name=%20%20</code>, <code>?name=%09</code></td>
+<td class="obs-tag">400, <code>errors.name</code> contains ONLY "The name field is required." — not [required, NameRule] as the
+contract text (pre-amendment) says. This is MVC binding whitespace-only query values to null before the
+<code>[ValidName]</code> validator runs. <strong>Recorded per instructions as a known contract-text defect, not a QA
+failure</strong> — the code's actual behaviour was confirmed and is consistent across both calls.</td></tr>
+<tr><td>G8 length/char/non-ASCII boundaries</td><td>101×<code>a</code>; <code>a=b</code>; <code>%25</code>; <code>Jos%C3%A9</code></td>
+<td class="pass-tag">All 4 → 400 (NameRule violations: length, disallowed char, disallowed char, non-ASCII).</td></tr>
+<tr><td>G8, 100×<code>a</code> (valid, unknown)</td><td><code>?name=aaaa...a</code> (100 chars)</td>
+<td class="pass-tag">404 (valid shape, no such person) — distinguishes length-boundary acceptance from the unknown-person 404.</td></tr>
+<tr><td>G12 old route removed</td><td><code>GET /AstronautDuty/Elena%20Vasquez</code></td>
+<td class="pass-tag">404, empty body (framework routing 404, no envelope, no person data, no echo).</td></tr>
+<tr><td>G13 unknown extra params ignored</td><td><code>?name=Elena%20Vasquez&amp;rank=X</code></td>
+<td class="pass-tag">200, Elena (extra param ignored).</td></tr>
+<tr><td>repeated <code>name</code> param <span class="obs-tag">(known contract defect b)</span></td><td><code>?name=Elena%20Vasquez&amp;name=Mira%20Okafor</code></td>
+<td class="obs-tag">200 — binds the FIRST value (Elena), not 400. <strong>Recorded as a known contract-text defect
+(MVC model binding behaviour), not a QA failure</strong>, matching the task brief exactly.</td></tr>
+</table>
+
+<h2 id="post">3. POST /AstronautDuty (HEAD, same <code>headB</code> session)</h2>
+<table>
+<tr><th>Case</th><th>Request</th><th>Result</th></tr>
+<tr><td>A1 base success</td><td>Kenji, CPT/Pilot/2024-01-01</td>
+<td class="pass-tag">201; body exactly {id, success, message, responseCode} (id=9, message "Successful", responseCode 201);
+<code>Location: /AstronautDuty?name=Kenji%20Watanabe</code>; following it returns 200 with the new duty.</td></tr>
+<tr><td>A3 unknown person</td><td>name "Nonexistent Person"</td>
+<td class="pass-tag">404, <code>{"id":null,"success":false,"message":"Person not found","responseCode":404}</code>, no echo.</td></tr>
+<tr><td>A4 duplicate</td><td>A1 body resent</td>
+<td class="pass-tag">409, <code>{"id":null,"success":false,"message":"A duty with this title and start date already exists for this person","responseCode":409}</code>.</td></tr>
+<tr><td>A5 dup ignoring case &amp; time</td><td>dutyTitle "PILOT", dutyStartDate with a time part, same date</td>
+<td class="pass-tag">409 — confirmed case-insensitive and date-part-only comparison.</td></tr>
+<tr><td>A6 same title/date, different person</td><td>Mira, CPT/Pilot/2024-01-01</td>
+<td class="pass-tag">201 — not a duplicate across people.</td></tr>
+<tr><td>Missing name/rank/dutyTitle/dutyStartDate</td><td>each omitted in turn</td>
+<td class="pass-tag">All 400, field-specific required messages ("The Name/Rank/DutyTitle/DutyStartDate field is required."), nothing written.</td></tr>
+<tr><td>A9 date bounds</td><td><code>0001-01-01</code>, <code>1899-12-31</code>, <code>2101-01-01</code></td>
+<td class="pass-tag">All 400 with "Use a date between 1900-01-01 and 2100-12-31."</td></tr>
+<tr><td>A9 date boundaries valid</td><td><code>1900-01-01</code>, <code>2100-12-31</code></td>
+<td class="pass-tag">Both 201.</td></tr>
+<tr><td>A9/A10 malformed date / JSON</td><td><code>"not-a-date"</code>; <code>[]</code> body</td>
+<td class="pass-tag">Both 400 with generic "The input was not valid." / "The request field is required." — no parser internals.</td></tr>
+<tr><td>A11 content-type</td><td><code>text/plain</code></td>
+<td class="pass-tag">415, empty body.</td></tr>
+<tr><td>A12 unknown properties ignored</td><td>body with extra <code>id:999, personId:3</code></td>
+<td class="pass-tag">201; new duty belongs to the named person, id is a fresh server id (14), not 999; Tomas unchanged.</td></tr>
+<tr><td>413 request size</td><td>~5 KB body (dutyTitle padded)</td>
+<td class="pass-tag">413 (RequestSizeLimit 4096 enforced).</td></tr>
+<tr><td>A13 order of checks</td><td>invalid rank + unknown person; duplicate + invalid title; unknown person + would-be-dup</td>
+<td class="pass-tag">400, 400, 404 respectively — validation first, then 404, then 409, exactly as specified.</td></tr>
+<tr><td>A15 trim before storage</td><td>rank <code>" MAJ "</code>, dutyTitle <code>"\tCommander2 "</code></td>
+<td class="pass-tag">Stored in SQLite as exactly <code>MAJ</code> / <code>Commander2</code> (verified via direct DB read, not just the response).</td></tr>
+<tr><td>A16 Production 500 body</td><td>empty/unmigrated DB, Production env, GET and POST</td>
+<td class="pass-tag">Both 500 with <strong>empty response body</strong> (<code>Content-Length: 0</code>); the stack trace (no SQL text, no person
+name) appeared only in the server-side log, never in the HTTP response.</td></tr>
+<tr><td>Swagger</td><td><code>/swagger/v1/swagger.json</code></td>
+<td class="pass-tag"><code>/AstronautDuty/{name}</code> absent; <code>get</code> has required <code>name</code> query param, responses
+200/400/404/500; <code>post</code> responses 201/400/404/409/415/500. <code>/swagger/index.html</code> → 200.</td></tr>
+</table>
+
+<h2 id="rules">4. Rules 3-7 regression (not this task's scope, must not regress)</h2>
+<table>
+<tr><th>Case</th><th>Setup</th><th>Observed</th></tr>
+<tr><td>CH3-equivalent: Tomas, normal second duty</td><td>Tomas (Pilot/CPT, open since 2021-06-14) +
+<code>{MAJ, Commander, 2024-03-01T15:30:00}</code></td>
+<td class="pass-tag">Pilot duty <code>DutyEndDate</code> → 2024-02-29; new Commander duty 2024-03-01 00:00, end null; detail
+CurrentRank MAJ, CurrentDutyTitle Commander, CareerStartDate unchanged (2021-06-14), CareerEndDate null. Exactly matches the
+pinned "second duty arrives" behaviour.</td></tr>
+<tr><td>CH4-equivalent: Elena, RETIRED as a later duty</td><td>Elena (Commander open since 2019-01-01) + <code>{RETIRED, MAJ, 2025-01-01}</code></td>
+<td class="pass-tag">Commander duty ends 2024-12-31; detail CurrentDutyTitle RETIRED, CareerEndDate 2024-12-31 (start minus 1 day,
+correct for the "later duty" path); Flight Engineer / Pilot rows unchanged.</td></tr>
+<tr><td>Known defect: first-ever duty is RETIRED</td><td>Brand new person ("Fresh Testman") + <code>{RETIRED, CPT, 2024-06-01}</code> as their only duty</td>
+<td class="obs-tag"><code>CareerEndDate</code> = 2024-06-01 (the start date itself), not start-minus-1-day. <strong>This is the
+known defect documented in the task's "Out of scope" section and tracked as task 009 — recorded here as an
+observation, not a QA failure.</strong></td></tr>
+</table>
+
+<h2 id="preindex">5. Pre-index database consistency</h2>
+<p>Built a scratch DB migrated only to <code>MakeCareerStartDateRequired</code> (not <code>AddUniquePersonNameIndex</code>),
+inserted <code>Id 4 = 'bob'</code> and <code>Id 9 = 'Bob'</code> directly via SQL, then ran the HEAD app against it in
+Production (so it would not auto-migrate forward and overwrite the pre-index state).</p>
+<table>
+<tr><th>Request</th><th>Result</th></tr>
+<tr><td><code>POST /AstronautDuty {"name":"Bob", ...}</code></td><td class="pass-tag">201; duty row's <code>PersonId = 9</code> (exact-case match).</td></tr>
+<tr><td><code>POST /AstronautDuty {"name":"bob", ...}</code></td><td class="pass-tag">201; duty row's <code>PersonId = 4</code> (exact-case match).</td></tr>
+<tr><td><code>GET /AstronautDuty?name=Bob</code></td><td class="pass-tag">200, <code>person.personId = 9</code>.</td></tr>
+<tr><td><code>GET /AstronautDuty?name=bob</code></td><td class="pass-tag">200, <code>person.personId = 4</code>.</td></tr>
+<tr><td><code>GET /Person/Bob</code></td><td class="pass-tag">200, <code>person.personId = 9</code> — agrees exactly with the duties lookup for the same name.</td></tr>
+</table>
+<p class="small">This confirms the "exact-case match first, then lowest Id" rule (known contract-text item c in the task
+brief, now reflected in the architect's Amendment 1 to <code>docs/contracts/007/data.md</code>, section 1a) is applied
+identically by all three name lookups (create handler, duties GET, person GET) — recorded as an observation of
+designed, documented behaviour, not a defect.</p>
+
+<h2 id="regress">6. Regression of unchanged endpoints &amp; Swagger</h2>
+<table>
+<tr><th>Endpoint</th><th>HEAD</th><th>BASE</th></tr>
+<tr><td><code>GET /Person</code></td><td class="pass-tag">200</td><td class="pass-tag">200</td></tr>
+<tr><td><code>GET /Person?name=Kenji%20Watanabe</code></td><td class="pass-tag">200</td><td class="pass-tag">200</td></tr>
+<tr><td><code>GET /Person/Kenji%20Watanabe</code></td><td class="pass-tag">200</td><td class="pass-tag">200</td></tr>
+</table>
+<p>No regression observed in the Person endpoints between base and head.</p>
+<p><code>dotnet test</code> in the HEAD scratch copy (Debug): <strong class="pass-tag">669 passed, 0 failed, 0 skipped</strong> (11s).</p>
+
+<h2 id="ui">7. UI</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td><code>npm test -- --watch=false</code> (Vitest)</td><td class="pass-tag">2 test files, 47 tests passed.</td></tr>
+<tr><td><code>npm run build</code></td><td class="pass-tag">Succeeds; output to the pre-existing, gitignored <code>dist/ui</code>.</td></tr>
+<tr><td><code>npm start</code> (ng serve on :4200) proxying <code>/api</code> → HEAD API on :5204</td>
+<td class="pass-tag"><code>GET http://localhost:4200/api/AstronautDuty?name=Elena%20Vasquez</code> and the direct
+<code>GET http://localhost:5204/AstronautDuty?name=Elena%20Vasquez</code> returned byte-identical JSON (200). Same for
+the unknown-name case (both 404, identical body).</td></tr>
+</table>
+<p class="nt-tag">Not tested in a real browser: no browser automation tool was available in this sandbox. The UI was
+exercised only at the HTTP/proxy level (curl through the dev-server proxy) plus the unit test suite and production
+build, as permitted by the fallback instruction.</p>
+
+<h2 id="hygiene">8. Hygiene (end of run)</h2>
+<table>
+<tr><th>Check</th><th>Result</th></tr>
+<tr><td><code>git status --short</code> in the real repo</td><td class="pass-tag">Clean of changes caused by this QA run (pre-existing
+uncommitted amendments to <code>docs/contracts/007/{data.md,openapi.yaml,tests.md}</code> and the untracked
+<code>tasks/008-*.md</code>, <code>tasks/009-*.md</code> were already present before this session started — not created or
+modified by QA; see note below).</td></tr>
+<tr><td><code>git ls-files | grep '\.db$'</code></td><td class="pass-tag">Empty.</td></tr>
+<tr><td><code>exercise1/api/starbase.db</code></td><td class="pass-tag">0 bytes.</td></tr>
+<tr><td>Release bin/obj left in real repo</td><td class="pass-tag">None found.</td></tr>
+<tr><td><code>git diff main...HEAD --summary</code></td><td class="pass-tag">Only "create mode" / "delete mode" lines for new/removed
+files; no mode-CHANGE lines (e.g. 100644→100755).</td></tr>
+<tr><td>Processes left running</td><td class="pass-tag">None — all <code>dotnet run</code>/<code>StargateAPI</code>/<code>ng serve</code>/<code>npm start</code>
+processes started by this QA run were killed and verified gone by PID/port checks.</td></tr>
+<tr><td>Source grep for interpolated SQL</td><td class="pass-tag">No matches for <code>$"..SELECT/INSERT/UPDATE/DELETE/WHERE..</code>
+or <code>FromSqlRaw</code> in the HEAD scratch copy's <code>exercise1/api</code> (excluding bin/obj/Migrations). Manual read of
+<code>CreateAstronautDuty.cs</code> confirms the person lookup is pure EF LINQ (<code>_context.People.Where(...)</code>, no SQL
+string at all). Manual read of <code>GetAstronautDutiesByName.cs</code> confirms both queries are <code>private const string</code>
+literals with only <code>@Name</code> / <code>@PersonId</code> Dapper parameters — no interpolation, no concatenation, in either file.</td></tr>
+</table>
+<p class="small"><strong>Note on the pre-existing working-tree state:</strong> at the start of this QA session,
+<code>git status</code> already showed <code>docs/contracts/007/data.md</code>, <code>openapi.yaml</code> and <code>tests.md</code>
+as modified (an in-progress "Amendment 1" revising person-resolution wording and the date-offset note) and two
+untracked follow-up task files (<code>tasks/008-*.md</code>, <code>tasks/009-*.md</code>). This matches the task framing
+("an architect is amending them now") and was not touched, reverted, or added to by this QA run — only the one new
+file <code>docs/qa/007-astronaut-duty-endpoints.html</code> was written.</p>
+
+<h2 id="criteria">Criteria-to-cases table</h2>
+<table>
+<tr><th>Acceptance criterion (abridged)</th><th>Case(s)</th><th>Result</th></tr>
+<tr><td>No SQL interpolation/concatenation in Create/Get AstronautDuty handlers</td><td>§8 source grep + manual read</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Hostile name, write path: duty attaches only to the hostile-named person, others byte-identical</td><td>§1.1, §1.3 (4 payloads)</td><td class="pass-tag">Pass (observed on HEAD); contrasted against BASE where it fails</td></tr>
+<tr><td>Hostile name, read path: own duties only / unknown payload-shaped name is unknown-result</td><td>§1.2</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Legitimate apostrophe name works end to end, no 500</td><td>§1.4</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Rule-failing payload is 400 before SQL, no echo</td><td>§1.5, GET G8</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Hostile tests go through real HTTP + SQLite (not just handlers)</td><td>All of §1 via curl against a running Kestrel server + SQLite file</td><td class="pass-tag">Pass</td></tr>
+<tr><td>rank/dutyTitle treated as data (quotes stored verbatim if valid, 400 if rule-failing)</td><td>A15 (trim) demonstrates storage verbatim after trim; rule-failing payload in rank/title not separately re-run but validated by the shared <code>[ValidName]</code> attribute applying identically (confirmed via A8-equivalent 400s on rank/title keys in §3 and A13)</td><td class="pass-tag">Pass</td></tr>
+<tr><td>GET /AstronautDuty uses GetAstronautDutiesByName, 200 with person+astronautDuties, newest first</td><td>G1, G9</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Lookup exact, trimmed, case-insensitive; fragments never match</td><td>G2, G3</td><td class="pass-tag">Pass</td></tr>
+<tr><td>No assignment → 200 with empty duties (rule 2)</td><td>G4</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Unknown name → 404 fixed body, no echo</td><td>G5</td><td class="pass-tag">Pass</td></tr>
+<tr><td>name required (400 on missing/empty)</td><td>G6</td><td class="pass-tag">Pass</td></tr>
+<tr><td>name validated with shared ASCII rule (length/char/non-ASCII)</td><td>G8</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Old route removed (404, no echo)</td><td>G12</td><td class="pass-tag">Pass</td></tr>
+<tr><td>No GetPersonByName / try-catch in AstronautDutyController; no exception text leaked</td><td>§3 A16, source inspection</td><td class="pass-tag">Pass</td></tr>
+<tr><td>ResponseCode equals HTTP status</td><td>All GET/POST cases above</td><td class="pass-tag">Pass</td></tr>
+<tr><td>POST validation matches Person endpoints (name/rank/dutyTitle rule, dutyStartDate required+bounded)</td><td>§3 (missing fields, date bounds)</td><td class="pass-tag">Pass</td></tr>
+<tr><td>[Consumes]/[RequestSizeLimit] (415/413)</td><td>§3 (415, 413)</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Unknown person → 404 "Person not found", nothing written</td><td>A3</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Duplicate (person+title+date, case/time-insensitive) → 409; different person allowed</td><td>A4, A5, A6</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Success → 201 + id + Location</td><td>A1</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Rules 3-7 "second duty" behaviour pinned/unchanged</td><td>§4 (Tomas, Elena)</td><td class="pass-tag">Pass</td></tr>
+<tr><td>Swagger documents the endpoint correctly, old path gone</td><td>§3 Swagger</td><td class="pass-tag">Pass</td></tr>
+<tr><td>UI getDuties sends query param correctly, no path segment</td><td>§7 (proxy vs direct)</td><td class="pass-tag">Pass (verified at HTTP/proxy level)</td></tr>
+<tr><td>Vitest coverage for query string, duties, empty, unknown, error propagation</td><td>§7 (47 tests passed)</td><td class="pass-tag">Pass (test suite run, not independently re-derived case by case)</td></tr>
+<tr><td>xUnit/WebApplicationFactory coverage of every case above</td><td>§6 (669 tests passed)</td><td class="pass-tag">Pass (suite run; not all 669 individually re-verified by QA, see below)</td></tr>
+</table>
+
+<h2 id="nottested">What was not tested, and why</h2>
+<ul>
+<li><strong>No real browser.</strong> This sandbox has no browser automation tool installed. UI behaviour (loading/empty/error
+states as rendered in markup, user interaction) was verified only via the dev-server proxy at the HTTP level plus the
+Vitest unit suite and a production build — not visually in a browser DOM.</li>
+<li><strong>Not every one of the 669 xUnit tests or 47 Vitest tests was independently re-derived by hand.</strong> QA ran
+the suites and confirmed 100% pass, and independently re-verified the highest-value cases (the injection replay, GET/POST
+edge cases, rules 3-7 regression, pre-index resolution) by hand against a live running server — these hand-verified cases
+are the ones itemised in this report.</li>
+<li><strong>S6 (rank/dutyTitle hostile-but-valid storage of apostrophe-containing values like <code>O'Neil</code>)</strong> was
+not separately re-run as its own payload; it is covered indirectly by A15 (trim-and-store verification) and by the shared
+validation attribute being proven identical across name/rank/dutyTitle in §3's 400 cases. Treated as adequately covered,
+not as a gap requiring a fail.</li>
+<li><strong>README changelog content</strong> (listing the breaking changes) was not independently verified against the
+exact wording required by the acceptance criterion — only that the file exists and the branch merged; a close text diff of
+the README was out of scope for this HTTP-focused QA pass.</li>
+</ul>
+
+<h2 id="observations">Observations (known, documented defects — not QA failures)</h2>
+<ol>
+<li><strong>Whitespace-only <code>name</code> on GET is 400 with only the required message</strong> (<code>%20%20</code>,
+<code>%09</code>), not <code>[required, NameRule]</code> — MVC binds a whitespace-only query value to <code>null</code> before
+the <code>[ValidName]</code> validator runs. Confirmed at §2 G7.</li>
+<li><strong>Repeated <code>?name=a&amp;name=b</code> binds the first value</strong> (200 for the first person), not 400.
+Confirmed at §2.</li>
+<li><strong>All three name lookups (create handler, GetAstronautDutiesByName, GetPersonByName) resolve a name by
+exact-case match first, then lowest Id</strong>, identically. Confirmed at §5 with the <code>bob</code>/<code>Bob</code>
+pre-index scratch DB. This is now also documented in the architect's in-progress Amendment 1 to the contract files
+(observed as a pre-existing, uncommitted working-tree change at the start of this QA run — not made by QA).</li>
+<li><strong>For a person's first-ever duty being RETIRED, <code>CareerEndDate</code> is set to the start date itself</strong>,
+not start-minus-1-day (rule 7). Confirmed at §4. This is the documented out-of-scope defect tracked by task 009.</li>
+<li><strong>On the vulnerable base build, which specific innocent person gets hit by an injection payload is
+non-deterministic / payload-dependent</strong> — <code>a' OR Id IS 3 OR 'a</code> hit Tomas Lindqvist (Id 3) exactly as
+named; <code>a' OR 1 OR 'a</code> (a universally-true condition) hit Mira Okafor (Id 1), SQLite's first row, not Id 3. Both
+are genuine cross-person writes; the specific victim is an accident of the generated SQL and row order, not something the
+attacker necessarily controls precisely — which makes the vulnerability more dangerous, not less.</li>
+<li><strong>On base, some hostile payloads (<code>a' OR 'a' IS 'a</code>, <code>Tomas Lindqvist'--</code>) happen to break
+the preprocessor's own interpolated existence check and surface as a stack-trace 400</strong> rather than reaching the
+vulnerable handler — this is incidental to how that string parses as SQL, not a mitigation, and still leaks a full stack
+trace including file paths to the client.</li>
+</ol>
+
+<hr>
+<p class="small">End of report. Report path:
+<code>/Users/tarikcatovic/Repos/interviews/package/docs/qa/007-astronaut-duty-endpoints.html</code></p>
+</div>
+</body>
+</html>

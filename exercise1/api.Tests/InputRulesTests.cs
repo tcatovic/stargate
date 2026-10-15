@@ -223,4 +223,30 @@ public class InputRulesTests
             Assert.Equal(person.Name, InputRules.Normalize(person.Name));
         }
     }
+
+    [Theory]
+    [InlineData(1899, 12, 31, 0, false)]
+    [InlineData(1900, 1, 1, 0, true)]
+    [InlineData(2100, 12, 31, 0, true)]
+    [InlineData(2100, 12, 31, 23, true)]
+    [InlineData(2101, 1, 1, 0, false)]
+    [InlineData(1, 1, 1, 0, false)]
+    public void V1_IsValidDutyDate_IsInclusiveOnTheDatePart(int year, int month, int day, int hour, bool expected)
+    {
+        var value = new DateTime(year, month, day, hour, hour == 0 ? 0 : 59, hour == 0 ? 0 : 59);
+
+        Assert.Equal(expected, InputRules.IsValidDutyDate(value));
+        Assert.Equal(expected, new ValidDutyDateAttribute().IsValid(value));
+    }
+
+    [Fact]
+    public void V1b_ValidDutyDateAttribute_AcceptsNull_RejectsOtherTypes_AndHasTheFixedMessage()
+    {
+        var attribute = new ValidDutyDateAttribute();
+
+        Assert.True(attribute.IsValid(null));
+        Assert.False(attribute.IsValid("2024-01-01"));
+        Assert.False(attribute.IsValid(DateTime.MinValue));
+        Assert.Equal("Use a date between 1900-01-01 and 2100-12-31.", attribute.FormatErrorMessage("DutyStartDate"));
+    }
 }

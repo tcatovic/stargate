@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Contract 007: AstronautDuty endpoints (revision 1, Amendment 1)</title>
+<style>
+  :root { --bg:#fff; --fg:#1d2330; --muted:#5a6475; --card:#f5f7fa; --border:#d9dee7; --accent:#2457c5; --ok:#1d7a3d; --warn:#9a6200; --bad:#b42318; --code:#eef1f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#11151c; --fg:#e4e8ef; --muted:#9aa4b4; --card:#1a2029; --border:#2c3442; --accent:#7aa2ff; --ok:#5fcf86; --warn:#f0b44c; --bad:#ff7b72; --code:#1f2633; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  main { max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 3rem; }
+  h1 { font-size:1.45rem; margin:.4rem 0; } h2 { font-size:1.12rem; margin:1.6rem 0 .5rem; border-bottom:1px solid var(--border); padding-bottom:.3rem; }
+  p, li, td { overflow-wrap: anywhere; }
+  a { color: var(--accent); }
+  .meta { color: var(--muted); font-size:.92rem; }
+  code { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.88em; background: var(--code); padding:.08em .3em; border-radius:4px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
+  .bad { border-left:5px solid var(--bad); } .ok { border-left:5px solid var(--ok); } .warn { border-left:5px solid var(--warn); } .amend { border-left:5px solid var(--accent); }
+  .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
+  .tag.bad { color:var(--bad); } .tag.ok { color:var(--ok); } .tag.warn { color:var(--warn); }
+  .table-wrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.93rem; }
+  th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
+  th { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<p class="meta">Task 007 &middot; contract revision 1, <strong>Amendment 1</strong> &middot; baseline <code>main</code> 280fcd9 &middot; implementation merged on the task branch at 81f13f0 &middot; awaiting re-approval together with <a href="../../plans/007-astronaut-duty-endpoints.html">the plan</a></p>
+<h1>Contract 007: AstronautDuty endpoints</h1>
+
+<div class="card amend">
+<p><strong>Amendment 1: what changed, and why.</strong> After implementation, the developer and reviewers found places where the contract text did not match the merged code. I checked each one against the code and tests. The amendment documents the merged behaviour. No status code, response shape or field changes, so there is <strong>no new breaking change</strong> and nothing new for the UI.</p>
+<ol>
+<li><strong>Whitespace-only <code>?name=</code></strong> (spaces, <code>%09</code>, <code>%0A</code>): 400 with only <code>["The name field is required."]</code>, not <code>[required, NameRule]</code>. MVC binds a whitespace-only query value to null. The status was always right; the message list was wrong. Files: openapi.yaml (<code>ValidationFailed</code>), data.md section 4, tests.md G7, plus new G7b.</li>
+<li><strong>Repeated <code>?name=a&amp;name=b</code></strong>: the first value is used. One person (or 404) results and the values are never merged. This is now documented and pinned by tests.md G7c. Files: openapi.yaml (GET), data.md section 2, tests.md.</li>
+<li><strong>Which person a name resolves to</strong>: now an exact-case match first, then the lowest id (was: lowest id). All three lookups (POST, <code>GET ?name=</code>, <code>GET /Person/{name}</code>) agree. This is observable only on a database that predates the unique-name index. Files: openapi.yaml, data.md sections 1a, 2 and 3, tests.md section 5a.</li>
+<li><strong>tests.md matches the merged suite.</strong> 20 IDs were added and A15, A16, K2, G6 and G8 were corrected. The mutation map is fixed: dropping the explicit <code>COLLATE NOCASE</code> changes nothing on a migrated database, because the column itself is NOCASE there. Only H8 and CH17 (pre-index schema) catch it.</li>
+<li><strong>Known gaps recorded</strong> (data.md section 6). Date offsets: the earlier text was imprecise, and the brief for this amendment was partly wrong. A numeric offset, including <code>+00:00</code>, is converted to server-local time. <code>Z</code> is not, which I verified with a probe. Also recorded: no transaction or open-duty index; the rules 3-7 defects; and a deployment follow-up to refuse to start outside Development with pending migrations.</li>
+</ol>
+<p>Unchanged: types.ts (UI types), every status code, every body shape, the breaking-change list below.</p>
+</div>
+
+<p>Files: <a href="openapi.yaml">openapi.yaml</a> &middot; <a href="data.md">data.md</a> &middot; <a href="types.ts">types.ts</a> &middot; <a href="tests.md">tests.md</a>. No schema change, no migration, no new package.</p>
+
+<div class="card bad"><p><strong>Security (first).</strong> Names, ranks and titles never alter SQL: they are passed only as parameters (EF LINQ for the create, static Dapper SQL for the read). Each request resolves the person once, by a trimmed, exact, case-insensitive name match. If several stored names match, which can only happen on a pre-index database, the exact-case match wins, then the lowest id. Only that person's id is used afterwards. <code>CreateAstronautDutyPreProcessor</code> is deleted. The task 006 demonstration (<code>a' OR Id IS 3 OR 'a</code> rewriting Tomas Lindqvist's duties) must now write only to the person whose name it is. That is tested over HTTP, with every other person's rows byte-identical before and after.</p></div>
+
+<h2>Breaking changes</h2>
+<div class="table-wrap"><table>
+<tr><th></th><th>Before (main)</th><th>After</th></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td><code>GET /AstronautDuty/{name}</code> returns the person only, no duties</td><td>Removed: 404 with an empty body. Use <code>GET /AstronautDuty?name=</code>.</td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td>Unknown name: 404 via the person lookup (old route)</td><td><code>GET ?name=</code> unknown: 404 <code>{person:null, astronautDuties:[], success:false, message:"Person not found", responseCode:404}</code></td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td>POST success: 200, no Location</td><td>201, <code>{id, success, message, responseCode}</code>, <code>Location: /AstronautDuty?name=&lt;escaped stored name&gt;</code></td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td>POST unknown person: 400 with a stack-trace page</td><td>404 <code>{id:null, success:false, message:"Person not found", responseCode:404}</code></td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td>Duplicate: 400. Same title and date blocked across <em>all</em> people; raw datetime comparison.</td><td>409. Same person only, date part only, title ignoring ASCII case. The same title and date for another person is allowed.</td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td><code>dutyStartDate</code> optional (becomes 0001-01-01, or a 500 for a person with duties)</td><td>Required, and the date part must be between 1900-01-01 and 2100-12-31. Send <code>YYYY-MM-DD</code>.</td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td><code>rank</code> and <code>dutyTitle</code> unbounded, stored as sent</td><td>The shared name rule (ASCII letters, digits, space, <code>.</code> <code>'</code> <code>-</code>; 1-100 characters; at least one letter or digit), stored trimmed. <code>Commander/Pilot</code> is now 400.</td></tr>
+<tr><td><span class="tag bad">BREAKING</span></td><td>Any content type, any size</td><td>415 for non-JSON, 413 over 4096 bytes</td></tr>
+<tr><td><span class="tag warn">shape</span></td><td>Duty items would carry <code>"person": null</code></td><td>Exactly <code>{id, personId, rank, dutyTitle, dutyStartDate, dutyEndDate}</code>. The UI type is already this.</td></tr>
+<tr><td><span class="tag warn">UI client</span></td><td><code>getDuties</code> returns the raw result from <code>/api/AstronautDuty/{name}</code></td><td><code>getDuties(name): Observable&lt;GetDutiesOutcome&gt;</code> (<code>found</code> / <code>notFound</code> / <code>invalid</code>). It has no callers today. No <code>createDuty</code>.</td></tr>
+</table></div>
+
+<h2>GET /AstronautDuty?name=</h2>
+<ul>
+<li>200: <code>{person: PersonAstronaut, astronautDuties: AstronautDutyItem[], success:true, message:"Successful", responseCode:200}</code>. Duties are ordered by start date, newest first, then by id descending. A person without an assignment gets <code>[]</code>.</li>
+<li>400: <code>ValidationProblemDetails</code> under key <code>name</code>. A missing, empty or whitespace-only name gives only "The name field is required." (Amendment 1). Over 100 characters, a disallowed character, or no letter or digit gives the name-rule message. The input is never echoed.</li>
+<li>A repeated <code>name</code> uses the first value (Amendment 1). Send it once.</li>
+<li>404: unknown name (fixed body above). 500: empty body in Production.</li>
+</ul>
+
+<h2>POST /AstronautDuty</h2>
+<ul>
+<li>Body: <code>{name, rank, dutyTitle, dutyStartDate}</code>, all required. Unknown properties are ignored.</li>
+<li>Order of checks: 415 and 413, then 400, then 404, then 409. Nothing is written on any error.</li>
+<li>409 messages (fixed): "A duty with this title and start date already exists for this person", or "The person's duties were changed by another request" (a concurrent first duty lost the race on the existing unique index for the person's detail).</li>
+<li>On success, the duty-history behaviour (rules 3-7) is <strong>unchanged</strong> for the same valid input. Rank and title are now trimmed, and when two duties tie on the latest start date, the one with the higher id is the one closed.</li>
+</ul>
+
+<h2>Known, deliberately out of scope (task 009)</h2>
+<ul>
+<li>A first <code>RETIRED</code> duty sets <code>CareerEndDate</code> to the start date instead of start minus 1.</li>
+<li><code>RETIRED</code> is case-sensitive.</li>
+<li>Back-dated and same-day duties are accepted, and an already-closed latest duty is closed again. A later duty does not clear <code>CareerEndDate</code>.</li>
+<li>There is no transaction around read, decide and write, and no unique index for the open duty or for person plus start date. Two concurrent POSTs for a person who already has a duty can both succeed and leave two open duties. There are no concurrency tests.</li>
+<li>Date offsets: a <code>dutyStartDate</code> with a numeric UTC offset (for example <code>-05:00</code>, and also <code>+00:00</code>) is converted to the server's local time before <code>.Date</code>. The stored date can therefore move by a day, depending on the server's time zone. The 1900-2100 bounds still hold. A value ending in <code>Z</code>, or a plain <code>YYYY-MM-DD</code>, keeps its written date.</li>
+</ul>
+<h2>Deployment follow-up (not this task)</h2>
+<p>Outside Development the API starts and serves requests on a database with pending migrations. Non-Development environments should refuse to start in that case. It needs its own task.</p>
+
+<h2>Parallel work</h2>
+<p><strong>api-dev</strong> builds against openapi.yaml, data.md and tests.md sections 1-6 (including 5a). <strong>ui-dev</strong> builds against types.ts and tests.md section 7. They need nothing from each other. (Both are done. Amendment 1 needs no further UI work.)</p>
+
+<h2>Confirmed with the original approval (recommendations in the plan, section 12)</h2>
+<ol>
+<li>Bounds for <code>dutyStartDate</code>: 1900-01-01 to 2100-12-31.</li>
+<li>Trim rank and title before storage, so a padded <code>" RETIRED "</code> counts as retired.</li>
+<li>The duplicate check ignores title case.</li>
+</ol>
+</main>
+</body>
+</html>

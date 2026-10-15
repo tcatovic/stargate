@@ -13,6 +13,10 @@ export interface PersonAstronaut {
   careerEndDate: string | null;
 }
 
+/**
+ * One item of GET /AstronautDuty?name=. Exactly these six properties. Dates are 'YYYY-MM-DDT00:00:00' (no offset);
+ * dutyEndDate is null for the current duty.
+ */
 export interface AstronautDuty {
   id: number;
   personId: number;
@@ -30,6 +34,10 @@ export interface GetPersonByNameResult extends BaseResponse {
   person: PersonAstronaut | null;
 }
 
+/**
+ * Body of GET /AstronautDuty?name= for 200 and 404. On 200 `person` is non-null and `astronautDuties` is ordered
+ * newest start first (possibly empty). On 404 `person` is null and `astronautDuties` is [].
+ */
 export interface GetAstronautDutiesByNameResult extends BaseResponse {
   person: PersonAstronaut | null;
   astronautDuties: AstronautDuty[];
@@ -42,7 +50,10 @@ export interface PersonFilters {
   dutyTitle?: string;
 }
 
-/** Body of every HTTP 400 from GET /Person, GET /Person/{name}, PUT /Person/{personId} and POST /Person. */
+/**
+ * Body of every HTTP 400 from GET /Person, GET /Person/{name}, PUT /Person/{personId}, POST /Person,
+ * GET /AstronautDuty and POST /AstronautDuty.
+ */
 export interface ValidationProblemDetails {
   type: string;
   title: string;
@@ -86,4 +97,10 @@ export interface CreatePersonResult extends BaseResponse {
 export type CreatePersonOutcome =
   | { status: 'created'; id: number }
   | { status: 'conflict' }
+  | { status: 'invalid'; errors: Record<string, string[]> };
+
+/** What StargateApi.getDuties emits. Exactly one value, then completes. */
+export type GetDutiesOutcome =
+  | { status: 'found'; person: PersonAstronaut; astronautDuties: AstronautDuty[] }
+  | { status: 'notFound' }
   | { status: 'invalid'; errors: Record<string, string[]> };

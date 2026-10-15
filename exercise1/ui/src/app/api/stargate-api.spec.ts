@@ -4,7 +4,10 @@ import { TestBed } from '@angular/core/testing';
 
 import {
   CreatePersonOutcome,
+  AstronautDuty,
   CreatePersonResult,
+  GetAstronautDutiesByNameResult,
+  GetDutiesOutcome,
   GetPeopleResult,
   GetPersonByNameResult,
   PersonAstronaut,
@@ -402,17 +405,15 @@ describe('StargateApi', () => {
 
     it('U5 emits conflict for 409', () => {
       const r = run();
-      http
-        .expectOne('/api/Person')
-        .flush(
-          {
-            success: false,
-            message: 'A person with this name already exists',
-            responseCode: 409,
-            id: null,
-          },
-          { status: 409, statusText: 'Conflict' },
-        );
+      http.expectOne('/api/Person').flush(
+        {
+          success: false,
+          message: 'A person with this name already exists',
+          responseCode: 409,
+          id: null,
+        },
+        { status: 409, statusText: 'Conflict' },
+      );
       expect(r.outcomes).toEqual([{ status: 'conflict' }]);
       expect(r.completed()).toBe(true);
     });
@@ -452,6 +453,166 @@ describe('StargateApi', () => {
       http.expectOne('/api/Person').error(new ProgressEvent('error'));
       expect(network.errors[0]).toBeInstanceOf(HttpErrorResponse);
       expect((network.errors[0] as HttpErrorResponse).status).toBe(0);
+    });
+  });
+
+  describe('getDuties', () => {
+    const duty = (id: number, start: string, end: string | null): AstronautDuty => ({
+      id,
+      personId: 1,
+      rank: 'Captain',
+      dutyTitle: 'Pilot',
+      dutyStartDate: start,
+      dutyEndDate: end,
+    });
+    const duties = [
+      duty(2, '2024-01-01T00:00:00', null),
+      duty(1, '2020-01-01T00:00:00', '2023-12-31T00:00:00'),
+    ];
+    const body = (
+      person: PersonAstronaut | null,
+      astronautDuties: AstronautDuty[],
+      code = 200,
+    ): GetAstronautDutiesByNameResult => ({
+      success: code === 200,
+      message: code === 200 ? 'Successful' : 'Not found',
+      responseCode: code,
+      person,
+      astronautDuties,
+    });
+
+    function run(name = 'Elena Vasquez'): {
+      outcomes: GetDutiesOutcome[];
+      errors: unknown[];
+      completed: () => boolean;
+    } {
+      const outcomes: GetDutiesOutcome[] = [];
+      const errors: unknown[] = [];
+      let done = false;
+      api.getDuties(name).subscribe({
+        next: (o) => outcomes.push(o),
+        error: (e: unknown) => errors.push(e),
+        complete: () => (done = true),
+      });
+      return { outcomes, errors, completed: () => done };
+    }
+
+    const expectUrl = (urlWithParams: string) =>
+      http.expectOne((r) => r.urlWithParams === urlWithParams);
+
+    it('D1 sends one GET /api/AstronautDuty with only the name query parameter', () => {
+      api.getDuties('Elena Vasquez').subscribe();
+      const req = expectUrl('/api/AstronautDuty?name=Elena%20Vasquez');
+      expect(req.request.method).toBe('GET');
+      expect(req.request.url).toBe('/api/AstronautDuty');
+      expect(req.request.params.keys()).toEqual(['name']);
+      req.flush(body(mira, []));
+    });
+
+    it('D2 encodes apostrophes, spaces and reserved characters in the query string', () => {
+      api.getDuties("Aoife O'Brien Jr.").subscribe();
+      const first = expectUrl("/api/AstronautDuty?name=Aoife%20O'Brien%20Jr.");
+      expect(first.request.url).toBe('/api/AstronautDuty');
+      first.flush(body(mira, []));
+
+      api.getDuties('a&b+c#d').subscribe();
+      const second = expectUrl('/api/AstronautDuty?name=a%26b%2Bc%23d');
+      expect(second.request.url).toBe('/api/AstronautDuty');
+      second.flush(body(mira, []));
+    });
+
+    it('D3 emits found with the duties in server order and completes', () => {
+      const r = run();
+      expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush(body(mira, duties));
+      expect(r.outcomes).toEqual([{ status: 'found', person: mira, astronautDuties: duties }]);
+      expect(r.errors).toEqual([]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('D4 emits found with an empty list', () => {
+      const r = run();
+      expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush(body(mira, []));
+      expect(r.outcomes).toEqual([{ status: 'found', person: mira, astronautDuties: [] }]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('D5 emits notFound for 404 without an error', () => {
+      const r = run();
+      expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush(body(null, [], 404), {
+        status: 404,
+        statusText: 'Not Found',
+      });
+      expect(r.outcomes).toEqual([{ status: 'notFound' }]);
+      expect(r.errors).toEqual([]);
+      expect(r.completed()).toBe(true);
+    });
+
+    it('D6 emits invalid with the body errors for 400, or {} when absent', () => {
+      const withErrors = run();
+      expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush(problem('name'), {
+        status: 400,
+        statusText: 'Bad Request',
+      });
+      expect(withErrors.outcomes).toEqual([{ status: 'invalid', errors: { name: ['invalid'] } }]);
+      expect(withErrors.completed()).toBe(true);
+
+      const without = run();
+      expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush(
+        { title: 'Bad' },
+        { status: 400, statusText: 'Bad Request' },
+      );
+      expect(without.outcomes).toEqual([{ status: 'invalid', errors: {} }]);
+      expect(without.errors).toEqual([]);
+    });
+
+    it('D7 propagates 500, 401, 403 and a network error as HttpErrorResponse, never notFound', () => {
+      for (const status of [500, 401, 403]) {
+        const r = run();
+        expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush('x', {
+          status,
+          statusText: 'Error',
+        });
+        expect(r.outcomes).toEqual([]);
+        expect(r.errors[0]).toBeInstanceOf(HttpErrorResponse);
+        expect((r.errors[0] as HttpErrorResponse).status).toBe(status);
+      }
+      const network = run();
+      expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').error(new ProgressEvent('error'));
+      expect(network.outcomes).toEqual([]);
+      expect(network.errors[0]).toBeInstanceOf(HttpErrorResponse);
+      expect((network.errors[0] as HttpErrorResponse).status).toBe(0);
+    });
+
+    it('D8 errors with Malformed duties response for a 200 without person or duties array', () => {
+      const bodies: (object | null)[] = [
+        body(null, duties),
+        { success: true, message: 'Successful', responseCode: 200, person: mira },
+        {
+          success: true,
+          message: 'Successful',
+          responseCode: 200,
+          person: mira,
+          astronautDuties: null,
+        },
+        null,
+      ];
+      for (const b of bodies) {
+        const r = run();
+        expectUrl('/api/AstronautDuty?name=Elena%20Vasquez').flush(b);
+        expect(r.outcomes).toEqual([]);
+        expect(r.errors.length).toBe(1);
+        expect((r.errors[0] as Error).message).toBe('Malformed duties response');
+      }
+    });
+
+    it('D9 sends the name unmodified, including whitespace and the empty string', () => {
+      api.getDuties('  Elena Vasquez ').subscribe();
+      expectUrl('/api/AstronautDuty?name=%20%20Elena%20Vasquez%20').flush(body(mira, []));
+
+      api.getDuties('').subscribe();
+      const req = expectUrl('/api/AstronautDuty?name=');
+      expect(req.request.method).toBe('GET');
+      req.flush(body(mira, []));
     });
   });
 });

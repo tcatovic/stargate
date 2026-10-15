@@ -17,10 +17,15 @@ internal sealed class DutyApiHost : IDisposable
     private readonly WebApplicationFactory<Program> _factory;
     private readonly HttpClient _client;
 
-    public DutyApiHost(bool seed = true, bool migrate = true)
+    public DutyApiHost(bool seed = true, bool migrate = true, string? migrateTo = null, string environment = "Development")
     {
         Db = new TestDatabase();
-        if (seed)
+        if (migrateTo is not null)
+        {
+            // An older schema; use a non-Development environment so startup does not migrate it forward.
+            Db.Migrate(migrateTo);
+        }
+        else if (seed)
         {
             Db.Dispose();
             Db = TestDatabase.Seeded();
@@ -32,7 +37,7 @@ internal sealed class DutyApiHost : IDisposable
 
         _factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
-            builder.UseEnvironment("Development");
+            builder.UseEnvironment(environment);
             builder.UseSetting("ConnectionStrings:StarbaseApiDatabase", Db.ConnectionString);
         });
         _client = _factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });

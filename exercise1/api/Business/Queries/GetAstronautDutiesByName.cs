@@ -15,13 +15,13 @@ namespace StargateAPI.Business.Queries
     public class GetAstronautDutiesByNameHandler : IRequestHandler<GetAstronautDutiesByName, GetAstronautDutiesByNameResult>
     {
         // Static SQL: the name and the id only ever travel as parameters. The person SQL is a copy of
-        // GetPersonByName's on purpose (task 008 deletes that type).
+        // GetPersonByName's on purpose (task 008 deletes that type); the order (exact-case match first, then lowest Id) matches it and the create handler.
         private const string PersonSql = """
             SELECT a.Id AS PersonId, a.Name, b.CurrentRank, b.CurrentDutyTitle, b.CareerStartDate, b.CareerEndDate
             FROM [Person] a
             LEFT JOIN [AstronautDetail] b ON b.PersonId = a.Id
             WHERE a.Name = @Name COLLATE NOCASE
-            ORDER BY a.Id
+            ORDER BY CASE WHEN a.Name = @Name COLLATE BINARY THEN 0 ELSE 1 END, a.Id
             LIMIT 1
             """;
 

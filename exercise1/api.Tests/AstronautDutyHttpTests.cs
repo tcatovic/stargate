@@ -120,6 +120,33 @@ public sealed partial class AstronautDutyHttpTests : IDisposable
         ProblemAssert.HasNameErrors(reply.Json, "name", RequiredName);
     }
 
+    [Theory]
+    [InlineData("/AstronautDuty?name=%09")]
+    [InlineData("/AstronautDuty?name=%0A")]
+    public async Task G7b_ATabOrNewlineOnlyName_BehavesLikeOtherWhitespace_400Required(string url)
+    {
+        var reply = await _host.Get(url);
+
+        Assert.Equal(HttpStatusCode.BadRequest, reply.Status);
+        ProblemAssert.HasNameErrors(reply.Json, "name", RequiredName);
+    }
+
+    [Theory]
+    [InlineData("/AstronautDuty?name=Elena%20Vasquez&name=Tomas%20Lindqvist")]
+    [InlineData("/AstronautDuty?name=Tomas%20Lindqvist&name=Elena%20Vasquez")]
+    public async Task G7c_ARepeatedNameParameter_ResolvesExactlyOnePerson_AndNeverMergesThem(string url)
+    {
+        var reply = await _host.Get(url);
+
+        // Observed (not the 400 one might expect from a comma-joined value): a single-valued string parameter binds the FIRST
+        // value. Pinned so a binder change cannot silently start using the last value or a combination of both.
+        Assert.Equal(HttpStatusCode.OK, reply.Status);
+        var expected = url.Contains("name=Elena%20Vasquez&") ? "Elena Vasquez" : "Tomas Lindqvist";
+        Assert.Equal(expected, reply.Json.GetProperty("person").GetProperty("name").GetString());
+        var id = reply.Json.GetProperty("person").GetProperty("personId").GetInt32();
+        Assert.All(reply.Json.GetProperty("astronautDuties").EnumerateArray(), d => Assert.Equal(id, d.GetProperty("personId").GetInt32()));
+    }
+
     [Fact]
     public async Task G7_AWhitespaceOnlyName_Is400_Required()
     {
@@ -348,6 +375,37 @@ public sealed partial class AstronautDutyHttpTests : IDisposable
         Assert.Equal(before, _host.Db.Dump());
     }
 
+    [Theory]
+    [InlineData("Kenji")]
+    [InlineData("Tomas")]
+    public async Task A3b_AFragmentOfAnExistingName_Is404_AndNothingIsWritten(string fragment)
+    {
+        var before = _host.Db.Dump();
+
+        var reply = await Post(Body(name: fragment));
+
+        Assert.Equal(HttpStatusCode.NotFound, reply.Status);
+        Assert.Equal(NotFound, reply.Json.GetProperty("message").GetString());
+        Assert.Equal(before, _host.Db.Dump());
+    }
+
+    [Theory]
+    [InlineData("b' OR 1 OR 'b")]
+    [InlineData("b' OR Id IS 3 OR 'b")]
+    public async Task A3c_APayloadShapedUnknownName_Is404_NothingIsWritten_AndTheValueIsNotEchoed(string name)
+    {
+        var before = _host.Db.Dump();
+
+        var reply = await Post(Body(name: name));
+
+        Assert.Equal(HttpStatusCode.NotFound, reply.Status);
+        Assert.Equal(NotFound, reply.Json.GetProperty("message").GetString());
+        ProblemAssert.NothingDecodedContains(reply.Json, name);
+        Assert.DoesNotContain("OR", reply.Body);
+        Assert.Null(reply.Location);
+        Assert.Equal(before, _host.Db.Dump());
+    }
+
     [Fact]
     public async Task A4_ADuplicate_Is409_WithTheFixedBody_AndTheSecondRequestWritesNothing()
     {
@@ -400,31 +458,30 @@ public sealed partial class AstronautDutyHttpTests : IDisposable
         Assert.Equal(HttpStatusCode.Created, reply.Status);
     }
 
-    public static TheoryData<string, string, string?, string[]> InvalidTextFields()
+    public static TheoryData<string, string?, string[]> InvalidTextFields()
     {
-        var data = new TheoryData<string, string, string?, string[]>();
+        var data = new TheoryData<string, string?, string[]>();
         foreach (var field in new[] { "name", "rank", "dutyTitle" })
         {
             var display = char.ToUpperInvariant(field[0]) + field[1..];
             var required = $"The {display} field is required.";
-            data.Add(field, "omitted", null, [required]);
-            data.Add(field, "null", "null", [required]);
-            data.Add(field, "empty", "\"\"", [required, ProblemAssert.NameRuleMessage]);
-            data.Add(field, "blank", "\"   \"", [required, ProblemAssert.NameRuleMessage]);
-            data.Add(field, "quote payload", "\"x' OR '1'='1\"", [ProblemAssert.NameRuleMessage]);
-            data.Add(field, "semicolon", "\"a;b\"", [ProblemAssert.NameRuleMessage]);
-            data.Add(field, "too long", "\"" + new string('a', 101) + "\"", [ProblemAssert.NameRuleMessage]);
-            data.Add(field, "non-ascii", "\"Jos\\u00E9\"", [ProblemAssert.NameRuleMessage]);
-            data.Add(field, "dots only", "\"..\"", [ProblemAssert.NameRuleMessage]);
+            data.Add(field, null, [required]);
+            data.Add(field, "null", [required]);
+            data.Add(field, "\"\"", [required, ProblemAssert.NameRuleMessage]);
+            data.Add(field, "\"   \"", [required, ProblemAssert.NameRuleMessage]);
+            data.Add(field, "\"x' OR '1'='1\"", [ProblemAssert.NameRuleMessage]);
+            data.Add(field, "\"a;b\"", [ProblemAssert.NameRuleMessage]);
+            data.Add(field, "\"" + new string('a', 101) + "\"", [ProblemAssert.NameRuleMessage]);
+            data.Add(field, "\"Jos\\u00E9\"", [ProblemAssert.NameRuleMessage]);
+            data.Add(field, "\"..\"", [ProblemAssert.NameRuleMessage]);
         }
         return data;
     }
 
     [Theory]
     [MemberData(nameof(InvalidTextFields))]
-    public async Task A8_AnInvalidNameRankOrTitle_Is400_WithTheExactMessages_NoEcho_AndNothingWritten(string field, string kind, string? json, string[] messages)
+    public async Task A8_AnInvalidNameRankOrTitle_Is400_WithTheExactMessages_NoEcho_AndNothingWritten(string field, string? json, string[] messages)
     {
-        _ = kind;
         var members = new Dictionary<string, string>
         {
             ["name"] = "\"Kenji Watanabe\"", ["rank"] = "\"CPT\"", ["dutyTitle"] = "\"Pilot\"", ["dutyStartDate"] = "\"2024-01-01\"",

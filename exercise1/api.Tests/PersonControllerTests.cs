@@ -55,39 +55,11 @@ public class PersonControllerTests
     }
 
     [Fact]
-    public async Task C3_GetPersonByName_Found_Is200()
-    {
-        using var db = PeopleFixture.Create();
-
-        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPersonByName("mira okafor", CancellationToken.None)));
-
-        var body = Assert.IsType<GetPersonByNameResult>(result.Value);
-        Assert.Equal(200, result.StatusCode);
-        Assert.Equal(200, body.ResponseCode);
-        Assert.Equal("Mira Okafor", body.Person?.Name);
-    }
-
-    [Fact]
-    public async Task C4_GetPersonByName_Unknown_Is404()
-    {
-        using var db = PeopleFixture.Create();
-
-        var result = Assert.IsType<ObjectResult>(await WithController(db, c => c.GetPersonByName("Nobody", CancellationToken.None)));
-
-        var body = Assert.IsType<GetPersonByNameResult>(result.Value);
-        Assert.Equal(404, result.StatusCode);
-        Assert.Equal(404, body.ResponseCode);
-        Assert.False(body.Success);
-        Assert.Null(body.Person);
-    }
-
-    [Fact]
     public async Task C5_DatabaseFault_Propagates_InsteadOfBecomingA500Body()
     {
         using var db = new TestDatabase(); // not migrated: no tables
 
         await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPeople(new GetPeople(), CancellationToken.None)));
-        await Assert.ThrowsAsync<SqliteException>(() => WithController(db, c => c.GetPersonByName("x", CancellationToken.None)));
     }
 
     private sealed class CapturingMediator : IMediator

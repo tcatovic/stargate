@@ -41,27 +41,6 @@ namespace StargateAPI.Controllers
             return this.GetResponse(result);
         }
 
-        [HttpGet("{name}")]
-        [EndpointSummary("Get one person by exact name (case-insensitive)")]
-        [EndpointDescription("The route value is URL-decoded and trimmed, then matched exactly, ignoring ASCII case. "
-            + "% and _ have no wildcard meaning. An unknown name returns 404.")]
-        [ProducesResponseType(typeof(GetPersonByNameResult), StatusCodes.Status200OK)]
-        [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
-        [ProducesResponseType(typeof(GetPersonByNameResult), StatusCodes.Status404NotFound)]
-        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
-        public async Task<IActionResult> GetPersonByName(
-            [FromRoute, StringLength(InputRules.MaxLength, MinimumLength = 1), RegularExpression(InputRules.AllowedCharactersPattern, ErrorMessage = InputRules.AllowedCharactersMessage),
-                Description("The person's full name, URL-encoded (e.g. Mira%20Okafor, O%27Brien).")] string name,
-            CancellationToken cancellationToken)
-        {
-            var result = await _mediator.Send(new GetPersonByName()
-            {
-                Name = name
-            }, cancellationToken);
-
-            return this.GetResponse(result);
-        }
-
         [HttpPut("{personId}")]
         [Consumes("application/json")]
         [RequestSizeLimit(4096)]

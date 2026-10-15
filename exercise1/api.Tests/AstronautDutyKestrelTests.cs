@@ -62,4 +62,82 @@ public sealed class AstronautDutyKestrelTests
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.Equal("", body);
     }
+
+    [Fact]
+    public async Task K1_TheLocationHeader_IsExactlyEscapedOnRealKestrel()
+    {
+        using var db = new TestDatabase();
+        using var factory = StartKestrel(db, "Development", migrate: true);
+        using var client = factory.CreateClient();
+
+        using var person = await client.PostAsync("/Person", Json("{\"name\":\"Aoife O'Brien Jr.\"}"));
+        using var response = await client.PostAsync("/AstronautDuty",
+            Json("{\"name\":\"Aoife O'Brien Jr.\",\"rank\":\"CPT\",\"dutyTitle\":\"Mission Specialist\",\"dutyStartDate\":\"2026-03-01\"}"));
+
+        Assert.Equal(HttpStatusCode.Created, person.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal("/AstronautDuty?name=Aoife%20O%27Brien%20Jr.", response.Headers.Location?.OriginalString);
+        using var read = await client.GetAsync(response.Headers.Location);
+        Assert.Equal(HttpStatusCode.OK, read.StatusCode);
+        Assert.Contains("Mission Specialist", await read.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task K2b_AnUnexpectedFaultOnPost_InProduction_Is500WithAnEmptyBody()
+    {
+        using var db = new TestDatabase();
+        using var factory = StartKestrel(db, "Production", migrate: false);
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsync("/AstronautDuty",
+            Json("{\"name\":\"Secretname Probe\",\"rank\":\"CPT\",\"dutyTitle\":\"Pilot\",\"dutyStartDate\":\"2024-01-01\"}"));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("", body);
+    }
+
+    [Theory]
+    [InlineData("GET")]
+    [InlineData("POST")]
+    public async Task A16_AnUnexpectedFault_InDevelopment_IsNotAJsonEnvelopeCarryingTheExceptionMessage(string method)
+    {
+        using var db = new TestDatabase();
+        using var factory = StartKestrel(db, "Development", migrate: true);
+        using var client = factory.CreateClient();
+        db.Execute("DROP TABLE \"AstronautDuty\"");
+
+        using var response = method == "GET"
+            ? await client.GetAsync("/AstronautDuty?name=Elena%20Vasquez")
+            : await client.PostAsync("/AstronautDuty",
+                Json("{\"name\":\"Kenji Watanabe\",\"rank\":\"CPT\",\"dutyTitle\":\"Pilot\",\"dutyStartDate\":\"2024-01-01\"}"));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.NotEqual("application/json", response.Content.Headers.ContentType?.MediaType);
+        Assert.DoesNotContain("\"success\"", body);
+        Assert.DoesNotContain("\"responseCode\"", body);
+    }
+
+    private static string PaddedBody(int bytes)
+    {
+        const string core = "{\"name\":\"Kenji Watanabe\",\"rank\":\"CPT\",\"dutyTitle\":\"Pilot\",\"dutyStartDate\":\"2024-01-01\"}";
+        return core + new string(' ', bytes - core.Length);
+    }
+
+    [Fact]
+    public async Task K3_ABodyOverTheRequestSizeLimit_Is413_AndWritesNothing_While4096BytesIsAccepted()
+    {
+        using var db = new TestDatabase();
+        using var factory = StartKestrel(db, "Development", migrate: true);
+        using var client = factory.CreateClient();
+        var before = db.Dump();
+
+        using var tooLarge = await client.PostAsync("/AstronautDuty", Json(PaddedBody(4097)));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, tooLarge.StatusCode);
+        Assert.Equal(before, db.Dump());
+
+        using var atLimit = await client.PostAsync("/AstronautDuty", Json(PaddedBody(4096)));
+        Assert.Equal(HttpStatusCode.Created, atLimit.StatusCode);
+    }
 }

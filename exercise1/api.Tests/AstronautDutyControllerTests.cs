@@ -56,4 +56,21 @@ public class AstronautDutyControllerTests
         Assert.Equal(200, result.StatusCode);
         Assert.IsType<GetAstronautDutiesByNameResult>(result.Value);
     }
+
+    [Fact]
+    public async Task C2_CreateAstronautDuty_PassesTheTokenAndTheRequestValues_AndBuildsTheEscapedLocation()
+    {
+        using var cts = new CancellationTokenSource();
+        var mediator = new CapturingMediator();
+
+        var result = await new AstronautDutyController(mediator).CreateAstronautDuty(
+            new CreateAstronautDutyRequest { Name = "Kenji Watanabe", Rank = "CPT", DutyTitle = "Pilot", DutyStartDate = new DateTime(2024, 1, 1) }, cts.Token);
+
+        Assert.Equal(cts.Token, mediator.Token);
+        var sent = Assert.IsType<CreateAstronautDuty>(mediator.Request);
+        Assert.Equal(("Kenji Watanabe", "CPT", "Pilot", new DateTime(2024, 1, 1)), (sent.Name, sent.Rank, sent.DutyTitle, sent.DutyStartDate));
+        var created = Assert.IsType<CreatedResult>(result);
+        Assert.Equal("/AstronautDuty?name=Kenji%20Watanabe", created.Location);
+        Assert.Equal(201, created.StatusCode);
+    }
 }

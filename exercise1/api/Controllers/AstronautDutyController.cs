@@ -40,10 +40,37 @@ namespace StargateAPI.Controllers
         }
 
         [HttpPost("")]
-        public async Task<IActionResult> CreateAstronautDuty([FromBody] CreateAstronautDuty request)
+        [Consumes("application/json")]
+        [RequestSizeLimit(4096)]
+        [EndpointSummary("Add a duty to a person")]
+        [EndpointDescription("Adds a duty for the person whose name equals name (trimmed, exact, ignoring ASCII case). name, rank and dutyTitle "
+            + "are validated against the shared name rule; rank and dutyTitle are stored trimmed. dutyStartDate is required (only its date part is used) "
+            + "and must be between 1900-01-01 and 2100-12-31. The person's current duty ends the day before the new one starts. "
+            + "An unknown person is 404. The same title (ignoring case) and start date for the same person is 409. "
+            + "Returns 201 with the new duty's id and a Location header /AstronautDuty?name=<URL-encoded stored name>.")]
+        [ProducesResponseType(typeof(CreateAstronautDutyResult), StatusCodes.Status201Created)]
+        [ProducesResponseType(typeof(ValidationProblemDetails), StatusCodes.Status400BadRequest)]
+        [ProducesResponseType(typeof(CreateAstronautDutyResult), StatusCodes.Status404NotFound)]
+        [ProducesResponseType(typeof(CreateAstronautDutyResult), StatusCodes.Status409Conflict)]
+        [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status415UnsupportedMediaType)]
+        [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+        public async Task<IActionResult> CreateAstronautDuty([FromBody] CreateAstronautDutyRequest request, CancellationToken cancellationToken)
         {
-                var result = await _mediator.Send(request);
-                return this.GetResponse(result);           
+            var result = await _mediator.Send(new CreateAstronautDuty
+            {
+                Name = request.Name ?? string.Empty,
+                Rank = request.Rank ?? string.Empty,
+                DutyTitle = request.DutyTitle ?? string.Empty,
+                DutyStartDate = request.DutyStartDate.GetValueOrDefault()
+            }, cancellationToken);
+
+            return result.ResponseCode == StatusCodes.Status201Created && result.Name is not null
+                ? Created(DutyLocation(result.Name), result)
+                : this.GetResponse(result);
         }
+
+        // Relative and percent-encoded (header values must be ASCII; names contain spaces and apostrophes).
+        // Built from the stored name, not the request's casing or padding.
+        private static string DutyLocation(string storedName) => "/AstronautDuty?name=" + Uri.EscapeDataString(storedName);
     }
 }

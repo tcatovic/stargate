@@ -46,11 +46,8 @@ internal sealed class DutyApiHost : IDisposable
         if (body is not null)
         {
             request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-            if (contentType is null)
-            {
-                request.Content.Headers.ContentType = null;
-            }
-            else
+            request.Content.Headers.Remove("Content-Type");
+            if (contentType is not null)
             {
                 request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
             }

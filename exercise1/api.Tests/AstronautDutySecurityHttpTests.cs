@@ -37,6 +37,7 @@ public sealed class AstronautDutySecurityHttpTests : IDisposable
         var reply = await _host.PostDuty(name, "CPT", "Injected Role", "2026-03-01");
 
         Assert.Equal(HttpStatusCode.Created, reply.Status);
+        Assert.Equal("/AstronautDuty?name=" + Uri.EscapeDataString(name), reply.Location);
         Assert.Equal(
             ["CPT|Injected Role|2026-03-01 00:00:00|<null>"],
             _host.Db.Strings($"SELECT \"Rank\" || '|' || \"DutyTitle\" || '|' || \"DutyStartDate\" || '|' || COALESCE(\"DutyEndDate\", '<null>') FROM \"AstronautDuty\" WHERE \"PersonId\" = {target}"));
@@ -61,6 +62,7 @@ public sealed class AstronautDutySecurityHttpTests : IDisposable
         var reply = await _host.PostDuty("  A' or id is 3 or 'A  ", "MAJ", "Second Role", "2026-04-01");
 
         Assert.Equal(HttpStatusCode.Created, reply.Status);
+        Assert.Equal("/AstronautDuty?name=a%27%20OR%20Id%20IS%203%20OR%20%27a", reply.Location);
         Assert.Equal(
             ["CPT|Injected Role|2026-03-01 00:00:00|2026-03-31 00:00:00", "MAJ|Second Role|2026-04-01 00:00:00|<null>"],
             _host.Db.Strings($"SELECT \"Rank\" || '|' || \"DutyTitle\" || '|' || \"DutyStartDate\" || '|' || COALESCE(\"DutyEndDate\", '<null>') FROM \"AstronautDuty\" WHERE \"PersonId\" = {target} ORDER BY \"Id\""));
@@ -76,7 +78,52 @@ public sealed class AstronautDutySecurityHttpTests : IDisposable
         var reply = await _host.PostDuty(name, "CPT", "Pilot", "2026-03-01");
 
         Assert.Equal(HttpStatusCode.Created, reply.Status);
+        Assert.Equal("/AstronautDuty?name=Aoife%20O%27Brien%20Jr.", reply.Location);
         Assert.Equal(JsonValueKind.Number, reply.Json.GetProperty("id").ValueKind);
         Assert.Equal(1, _host.Db.Scalar<long>("SELECT COUNT(*) FROM \"AstronautDuty\" WHERE \"PersonId\" = 7 AND \"DutyTitle\" = 'Pilot'"));
+
+        // The Location (and the escaped form of the same name) returns the new duty.
+        foreach (var url in new[] { reply.Location!, "/AstronautDuty?name=Aoife%20O%27Brien%20Jr." })
+        {
+            var read = await _host.Get(url);
+            Assert.Equal(HttpStatusCode.OK, read.Status);
+            Assert.Equal("Aoife O'Brien Jr.", read.Json.GetProperty("person").GetProperty("name").GetString());
+            Assert.Equal(reply.Json.GetProperty("id").GetInt32(), Assert.Single(read.Json.GetProperty("astronautDuties").EnumerateArray()).GetProperty("id").GetInt32());
+        }
+    }
+
+    [Fact]
+    public async Task S6_RankAndTitleAreData_QuotesAreStoredVerbatim_AndOthersAreUnchanged()
+    {
+        var others = _host.Db.DumpExcept(2);
+
+        var reply = await _host.PostDuty("Kenji Watanabe", "O'Neil", "Pilot' OR '1", "2026-03-01");
+
+        Assert.Equal(HttpStatusCode.Created, reply.Status);
+        Assert.Equal("O'Neil", _host.Db.Scalar<string>("SELECT \"Rank\" FROM \"AstronautDuty\" WHERE \"PersonId\" = 2"));
+        Assert.Equal("Pilot' OR '1", _host.Db.Scalar<string>("SELECT \"DutyTitle\" FROM \"AstronautDuty\" WHERE \"PersonId\" = 2"));
+        Assert.Equal("O'Neil", _host.Db.Scalar<string>("SELECT \"CurrentRank\" FROM \"AstronautDetail\" WHERE \"PersonId\" = 2"));
+        Assert.Equal("Pilot' OR '1", _host.Db.Scalar<string>("SELECT \"CurrentDutyTitle\" FROM \"AstronautDetail\" WHERE \"PersonId\" = 2"));
+        Assert.Equal(others, _host.Db.DumpExcept(2));
+    }
+
+    [Theory]
+    [InlineData("rank", "x' OR '1'='1")]
+    [InlineData("rank", "a;b")]
+    [InlineData("dutyTitle", "x' OR '1'='1")]
+    [InlineData("dutyTitle", "a;b")]
+    public async Task S6b_ARankOrTitleThatFailsTheRule_Is400_WithoutEcho_AndNothingIsWritten(string field, string value)
+    {
+        var before = _host.Db.Dump();
+        var rank = field == "rank" ? value : "CPT";
+        var title = field == "dutyTitle" ? value : "Pilot";
+
+        var reply = await _host.PostDuty("Kenji Watanabe", rank, title, "2026-03-01");
+
+        Assert.Equal(HttpStatusCode.BadRequest, reply.Status);
+        ProblemAssert.HasNameErrors(reply.Json, field, ProblemAssert.NameRuleMessage);
+        ProblemAssert.NothingDecodedContains(reply.Json, value);
+        Assert.DoesNotContain(value, reply.Body);
+        Assert.Equal(before, _host.Db.Dump());
     }
 }

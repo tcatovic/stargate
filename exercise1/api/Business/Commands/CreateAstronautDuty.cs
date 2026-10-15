@@ -3,10 +3,34 @@ using Microsoft.EntityFrameworkCore;
 using StargateAPI.Business.Data;
 using StargateAPI.Business.Validation;
 using StargateAPI.Controllers;
+using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 
 namespace StargateAPI.Business.Commands
 {
+    /// <summary>
+    /// The POST /AstronautDuty body. Members are nullable and have no <c>required</c> keyword so a missing member is a
+    /// field message from model validation, not a parser error. Unknown properties are ignored.
+    /// </summary>
+    public sealed class CreateAstronautDutyRequest
+    {
+        /// <summary>The person's full name; trimmed, then matched exactly, ignoring ASCII case.</summary>
+        [Required, ValidName]
+        public string? Name { get; init; }
+
+        /// <summary>Stored trimmed.</summary>
+        [Required, ValidName]
+        public string? Rank { get; init; }
+
+        /// <summary>Stored trimmed.</summary>
+        [Required, ValidName]
+        public string? DutyTitle { get; init; }
+
+        /// <summary>Only the date part is used; it must be between 1900-01-01 and 2100-12-31.</summary>
+        [Required, ValidDutyDate]
+        public DateTime? DutyStartDate { get; init; }
+    }
+
     public sealed class CreateAstronautDuty : IRequest<CreateAstronautDutyResult>
     {
         /// <summary>Raw; the handler normalises.</summary>

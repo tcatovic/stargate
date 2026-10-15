@@ -96,8 +96,8 @@ public sealed class PersonUpdateHttpTests : IDisposable
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerStartDate").ValueKind);
         Assert.Equal(JsonValueKind.Null, person.GetProperty("careerEndDate").ValueKind);
 
-        var (_, _, list) = await Get("/Person?name=Lindqvist");
-        Assert.Contains("Mira Okafor-Lindqvist", Names(list));
+        var (_, _, list) = await Get("/Person?name=mira%20okafor-lindqvist");
+        Assert.Equal(new[] { "Mira Okafor-Lindqvist" }, Names(list));
     }
 
     [Fact]
@@ -283,7 +283,7 @@ public sealed class PersonUpdateHttpTests : IDisposable
         var (status, text, _) = await Put(mira, new string('a', 5000));
 
         // [RequestSizeLimit(4096)] makes Kestrel answer 413. TestServer does not enforce the Kestrel limit, so over the
-        // in-memory server the request is still refused, by the 800-character raw bound, as a 400. Either way it is
+        // in-memory server the request is still refused, by the 100-character name rule, as a 400. Either way it is
         // rejected, nothing changes and the submitted text is not echoed; the 413 itself is checked against real Kestrel.
         Assert.True(status is HttpStatusCode.RequestEntityTooLarge or HttpStatusCode.BadRequest, status.ToString());
         Assert.DoesNotContain(new string('a', 50), text);
@@ -412,20 +412,24 @@ public sealed class PersonUpdateHttpTests : IDisposable
     }
 
     [Fact]
-    public async Task P13_TheReadSideFindsNfcNamesWithNfdInput_AndRejectsInvisibleLetters()
+    public async Task P13_NonAsciiIsRejectedOnPutAndOnTheReadSide()
     {
         var mira = IdOf("Mira Okafor");
-        Assert.Equal(HttpStatusCode.OK, (await Put(mira, "Ren\u00E9e \u00D6degaard")).Status);
+        var before = _db.Dump();
 
-        var (status, _, list) = await Get("/Person?name=Rene%CC%81e");
+        var (put, putText, _) = await Put(mira, "Ren\u00E9e \u00D6degaard");
+        var (filter, filterText, _) = await Get("/Person?name=Rene%CC%81e");
         var (invisible, _, _) = await Get("/Person?name=Ada%E3%85%A4");
-        var (byName, _, single) = await Get("/Person/Rene%CC%81e%20%C3%96degaard");
+        var (byName, byNameText, _) = await Get("/Person/Jos%C3%A9");
 
-        Assert.Equal(HttpStatusCode.OK, status);
-        Assert.Contains("Ren\u00E9e \u00D6degaard", Names(list));
+        Assert.Equal(HttpStatusCode.BadRequest, put);
+        Assert.Equal(HttpStatusCode.BadRequest, filter);
         Assert.Equal(HttpStatusCode.BadRequest, invisible);
-        Assert.Equal(HttpStatusCode.OK, byName);
-        Assert.Equal(mira, single.GetProperty("person").GetProperty("personId").GetInt32());
+        Assert.Equal(HttpStatusCode.BadRequest, byName);
+        Assert.DoesNotContain("gaard", putText);
+        Assert.DoesNotContain("Rene", filterText);
+        Assert.DoesNotContain("Jos", byNameText);
+        Assert.Equal(before, _db.Dump());
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace StargateAPI.Tests;
 
+[Collection(RealKestrel.Collection)]
 public sealed class PersonHttpProductionTests
 {
     [Fact]

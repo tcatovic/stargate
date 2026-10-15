@@ -13,7 +13,7 @@ namespace StargateAPI.Business.Commands
     /// <summary>The PUT /Person/{personId} body. Unknown properties are ignored.</summary>
     public sealed class UpdatePersonRequest
     {
-        /// <summary>New name. Surrounding whitespace is removed and the value is NFC-normalised before validation, comparison and storage.</summary>
+        /// <summary>New name. Surrounding ASCII whitespace is removed before validation, comparison and storage.</summary>
         [Required, ValidName]
         public string? Name { get; init; }
     }
@@ -52,8 +52,7 @@ namespace StargateAPI.Business.Commands
 
         public async Task<UpdatePersonResult> Handle(UpdatePerson request, CancellationToken cancellationToken)
         {
-            // The raw length is checked first so normalisation never runs on unbounded input.
-            var name = request.Name.Length <= InputRules.MaxRawLength ? InputRules.Normalize(request.Name) : string.Empty;
+            var name = InputRules.Normalize(request.Name);
             if (!InputRules.IsValidName(name))
             {
                 // Unreachable over HTTP (model validation runs first); guards other callers. Never includes the value.

@@ -31,9 +31,21 @@
 </head>
 <body>
 <main>
-<p class="meta">Task 007 &middot; plan revision 1 &middot; baseline <code>main</code> at <code>280fcd9</code> (tasks 001-006 merged) &middot; branch <code>task/007-astronaut-duty-endpoints</code> &middot; status: awaiting approval (plan and contracts together)</p>
+<p class="meta">Task 007 &middot; plan revision 1, <strong>Amendment 1</strong> &middot; baseline <code>main</code> at <code>280fcd9</code> (tasks 001-006 merged) &middot; branch <code>task/007-astronaut-duty-endpoints</code>, implementation merged at <code>81f13f0</code> &middot; status: Amendment 1 awaiting re-approval (plan and contracts together)</p>
 <h1>Plan 007: Fix the AstronautDuty endpoints</h1>
 <p class="meta">SQL injection first, then <code>GET /AstronautDuty?name=</code>, then a validated <code>POST /AstronautDuty</code>. Contracts: <a href="../contracts/007/contract.html">docs/contracts/007/contract.html</a>.</p>
+
+<div class="card amend">
+<p><strong>Amendment 1 (after implementation, 81f13f0).</strong> I checked each reported difference between this plan, the contracts and the merged code, and confirmed every one against the code and tests. Only documentation changes. No status code, shape or field changes, and no new work for any developer.</p>
+<ol>
+<li><strong>U1 resolved, and it was wrong (section 9).</strong> A whitespace-only <code>?name=</code> (spaces, tab, newline) gives 400 with only "The name field is required.". The query binder turns it into null, so the name rule never runs. Sections 3.2 and 9, openapi.yaml <code>ValidationFailed</code>, and tests.md G7 and G7b are updated.</li>
+<li><strong>Repeated <code>name</code> parameter</strong>: the first value binds. Exactly one person results and the values are never merged. Documented in section 3.2, pinned by G7c.</li>
+<li><strong>Person resolution</strong> (section 3.1, section 6 rule 1, data.md section 1a): exact-case match first, then the lowest id. This is now identical in the create handler (EF), <code>GetAstronautDutiesByName</code> (Dapper) and <code>GetPersonByName</code>. It matters only on a database that predates the unique-name index, and is tested by <code>PersonResolutionPreIndexHttpTests</code>.</li>
+<li><strong>Tests</strong> (section 7, tests.md): the real final test set is listed. The mutation statement on <code>COLLATE NOCASE</code> is corrected: dropping it changes nothing on a migrated database, and only H8 and CH17 (pre-index schema) catch it.</li>
+<li><strong>Known, deliberately out of scope, and a deployment follow-up</strong>: section 9. The date-offset statement is corrected: a numeric offset, including <code>+00:00</code>, is converted to server-local time; <code>Z</code> is not (verified by probe).</li>
+<li>Section 10 notes the actual commit order (the planned four commits, plus one review-fix commit).</li>
+</ol>
+</div>
 
 <h2>1. Summary and verdict</h2>
 <div class="card bad"><p><strong>The problem is real, and I confirmed it on <code>main</code>.</strong> Both duty handlers build SQL by string interpolation of the person's name. QA for task 006 replayed the attack (<code>docs/qa/006-create-person-endpoint.html</code>, observation 1). A person named <code>a' OR Id IS 3 OR 'a</code> was created through the unauthenticated <code>POST /Person</code>, then a duty was posted for that name, and the duty was written to Tomas Lindqvist (PersonId 3). The attack closed his Pilot duty and overwrote his AstronautDetail. A real name such as <code>Aoife O'Brien Jr.</code> got a 500 whose body contained the SQLite syntax error and a stack trace.</p></div>
@@ -59,7 +71,7 @@
 <h2>3. Approach</h2>
 <h3>3.1 Security fix (first, non-negotiable)</h3>
 <ol>
-<li><strong>Delete <code>CreateAstronautDutyPreProcessor</code></strong> and its registration in <code>Program.cs</code>, as task 006 did for people. The handler resolves the person <strong>exactly once</strong> with one parameterised EF LINQ query. It trims the name (<code>InputRules.Normalize</code>), matches case-insensitively and exactly (<code>EF.Functions.Collate(p.Name, "NOCASE") == name</code>), orders by Id and takes the first row. Every later read and write uses that person's <code>Id</code> and nothing else. The response's <code>Location</code> header uses that person's stored <code>Name</code>.</li>
+<li><strong>Delete <code>CreateAstronautDutyPreProcessor</code></strong> and its registration in <code>Program.cs</code>, as task 006 did for people. The handler resolves the person <strong>exactly once</strong> with one parameterised EF LINQ query. It trims the name (<code>InputRules.Normalize</code>), matches case-insensitively and exactly (<code>EF.Functions.Collate(p.Name, "NOCASE") == name</code>), orders an exact-case match first and then by Id, and takes the first row (Amendment 1: the same order as <code>GetPersonByName</code> and the GET handler; data.md section 1a). Every later read and write uses that person's <code>Id</code> and nothing else. The response's <code>Location</code> header uses that person's stored <code>Name</code>.</li>
 <li><strong>The create handler uses EF LINQ only</strong>, with no Dapper in the write path. It loads the detail and the latest duty as tracked entities and changes them in place, then calls one <code>SaveChangesAsync(ct)</code>. This replaces the Dapper-read-then-<code>Update()</code> pattern, so every value reaches SQLite as a parameter.</li>
 <li><strong>The GET handler keeps Dapper</strong> (the project convention for reads). It uses two static <code>const string</code> raw literals with <code>@Name</code> and <code>@PersonId</code> parameters through <code>CommandDefinition</code> with the token, the same pattern as <code>GetPersonByName</code> and <code>UpdatePerson.ReadBackSql</code>. The exact SQL is in <code>data.md</code> section 2.</li>
 <li>The duty-loading query is parameterised: <code>SELECT Id, PersonId, Rank, DutyTitle, DutyStartDate, DutyEndDate FROM [AstronautDuty] WHERE PersonId = @PersonId ORDER BY DutyStartDate DESC, Id DESC</code>. It maps to a new DTO, <code>AstronautDutyItem</code>.</li>
@@ -75,7 +87,8 @@
 <h3>3.2 GET /AstronautDuty?name=</h3>
 <ul>
 <li><code>[HttpGet("")]</code> with <code>[FromQuery, Required, ValidName, Description(...)] string? name</code> and <code>CancellationToken</code>. The action sends <code>GetAstronautDutiesByName</code> and returns <code>this.GetResponse(result)</code>. There is no <code>try/catch</code>, and the controller no longer references <code>GetPersonByName</code> (task 008 depends on this).</li>
-<li>A missing or empty <code>name</code> is 400 (Required). Whitespace-only is 400 (Required plus the name rule). Over 100 characters, a disallowed character, or no letter or digit is 400 (the rule). The body is a <code>ValidationProblemDetails</code> under key <code>name</code> and never echoes the input.</li>
+<li>A missing, empty or whitespace-only <code>name</code> (spaces, tab, newline) is 400 with only the Required message (Amendment 1: the query binder turns a whitespace-only value into null, so the name rule never sees it; the plan said "Required plus the name rule"). Over 100 characters, a disallowed character, or no letter or digit is 400 (the rule). The body is a <code>ValidationProblemDetails</code> under key <code>name</code> and never echoes the input.</li>
+<li>A repeated parameter (<code>?name=a&amp;name=b</code>) binds the first value (Amendment 1, test G7c). This is safe: exactly one person resolves and the values are never combined.</li>
 <li>Status codes: 200 with <code>person</code> plus <code>astronautDuties</code>, newest first (empty for a person with no assignment, rule 2). An unknown name is <strong>404</strong> with <code>{person:null, astronautDuties:[], success:false, message:"Person not found", responseCode:404}</code>.</li>
 <li><strong>Exact response DTO:</strong> duty items become the new <code>Business/Dtos/AstronautDutyItem</code> with <code>{id, personId, rank, dutyTitle, dutyStartDate, dutyEndDate}</code>. The <code>"person": null</code> member disappears. This is not a break for any consumer, because the old route never returned duties, and the UI's <code>AstronautDuty</code> interface already has exactly these six fields. Returning a DTO instead of the EF entity keeps the wire shape independent of the entity's navigation properties.</li>
 <li><strong><code>GET /AstronautDuty/{name}</code> is removed.</strong> No action matches any more, so routing answers <strong>404 with an empty body</strong>. A test pins this.</li>
@@ -174,9 +187,9 @@ No <code>createDuty</code> (decision 7).</td></tr>
 <h2>6. Domain rules</h2>
 <div class="table-wrap"><table>
 <tr><th>Rule</th><th>How it stays true</th></tr>
-<tr><td>1. A person is identified by name</td><td>Both handlers resolve the person once, with an exact, trimmed, ASCII case-insensitive match. The unique NOCASE index <code>IX_Person_Name</code> guarantees at most one row. A fragment such as <code>ra</code> never matches. An injection payload is a literal name, so it matches only the person with exactly that name.</td></tr>
+<tr><td>1. A person is identified by name</td><td>Both handlers resolve the person once, with an exact, trimmed, ASCII case-insensitive match. On a migrated database the unique NOCASE index <code>IX_Person_Name</code> guarantees at most one row. On a database that predates it, all three name lookups pick the same person: exact-case match first, then the lowest Id (Amendment 1). A fragment such as <code>ra</code> never matches. An injection payload is a literal name, so it matches only the person with exactly that name.</td></tr>
 <tr><td>2. No assignment means no astronaut rows</td><td>GET returns an empty <code>astronautDuties</code> list. Any rejected POST (400, 404 or 409) writes nothing, which tests assert with a full-table dump comparison.</td></tr>
-<tr><td>3-7</td><td>Behaviour unchanged for valid, unpadded input (section 3.4). A regression test pins the normal "second duty arrives" case and two neighbours. Defects deliberately left for task 009: a first <code>RETIRED</code> duty gets <code>CareerEndDate = start</code> instead of start minus 1; <code>RETIRED</code> is matched case-sensitively; back-dated and same-day duties are accepted, and the latest duty is closed even when it already has an end date; there is no transaction around read-decide-write; there is no unique index for the open duty or for <code>(PersonId, DutyStartDate)</code>; a later non-retired duty does not clear <code>CareerEndDate</code>; offsets in <code>dutyStartDate</code> are converted to server local time before <code>.Date</code> (section 9).</td></tr>
+<tr><td>3-7</td><td>Behaviour unchanged for valid, unpadded input (section 3.4). A regression test pins the normal "second duty arrives" case and two neighbours. Defects deliberately left for task 009: a first <code>RETIRED</code> duty gets <code>CareerEndDate = start</code> instead of start minus 1; <code>RETIRED</code> is matched case-sensitively; back-dated and same-day duties are accepted, and the latest duty is closed even when it already has an end date; there is no transaction around read-decide-write; there is no unique index for the open duty or for <code>(PersonId, DutyStartDate)</code>; a later non-retired duty does not clear <code>CareerEndDate</code>; a numeric offset in <code>dutyStartDate</code> is converted to server local time before <code>.Date</code> (section 9).</td></tr>
 </table></div>
 
 <h2>7. Tests</h2>
@@ -204,10 +217,28 @@ No <code>createDuty</code> (decision 7).</td></tr>
   <ul>
   <li><code>GetDuties_UnknownName…</code> is rewritten as a 404 test.</li>
   <li><code>GetDuties_KnownName…</code> and <code>GetDuties_PersonWithoutAstronautDetail…</code> are kept and moved to <code>GetAstronautDutiesByNameHandlerTests</code>.</li>
-  <li><code>CreateDuty_UnknownPerson…</code> is kept with the new constructor. <code>CreateDuty_KnownPerson…</code> is rewritten to expect 201.</li>
+  <li><code>CreateDuty_UnknownPerson…</code> is kept with the new constructor. <code>CreateDuty_KnownPerson…</code> is rewritten to expect 201. (As merged, all five were rewritten as H1-H3, CH1 and CH2.)</li>
   <li>The two <code>PreProcessor_*</code> tests are deleted, because the type is gone.</li>
   </ul>
   <code>ResponseShapeTests</code>: the duties shape is rewritten (no <code>person</code> member on items), and the create-result shape is kept, with <code>name</code> asserted absent.</li>
+<li><strong>Added during implementation and review</strong> (Amendment 1; full list in tests.md):
+  <ul>
+  <li>pre-index person resolution over HTTP (<code>PersonResolutionPreIndexHttpTests</code>) and in the handlers (H8, CH17)</li>
+  <li>whitespace-only and repeated <code>name</code> parameters (G7b, G7c)</li>
+  <li>POST fragment and payload-shaped unknown names (A3b, A3c)</li>
+  <li>inclusive and unparseable date bounds (A9b, A9c)</li>
+  <li>content-type splits (A11b, A11c)</li>
+  <li>no other person touched by a normal create (A17)</li>
+  <li>rule-failing rank and title (S6b)</li>
+  <li>cancellation during the save (CH12b)</li>
+  <li>trimmed and case-folded create, and a padded <code>RETIRED</code> (CH15, CH16)</li>
+  <li>the routing 404 on Kestrel (U4)</li>
+  <li>a POST 500 in Production (K2b)</li>
+  <li>the GET tie-break in the handler (H7)</li>
+  <li>the attribute's message (V1b)</li>
+  <li>the 100-character unknown name (G8b)</li>
+  </ul>
+  A16 runs on Kestrel in Development, with the <code>AstronautDuty</code> table dropped, for GET and POST.</li>
 <li><strong>Concurrency HTTP tests: not required</strong> (task 009).</li>
 <li><strong>Mutation targets</strong>, each of which must fail at least one named test:
   <ul>
@@ -224,7 +255,7 @@ No <code>createDuty</code> (decision 7).</td></tr>
   <li>date bounds removed</li>
   <li><code>GetPersonByName</code> sent again</li>
   </ul>
-  The mapping is in <code>tests.md</code> section 6.</li>
+  The mapping is in <code>tests.md</code> section 6. Correction (Amendment 1): the plan implied that G2, A2, H4 and S7 catch a dropped <code>COLLATE NOCASE</code>. They do not, because on a migrated database the column is NOCASE and the mutation is equivalent. H8 and CH17 run on the pre-index schema and catch it. Removing <code>COLLATE BINARY</code> from the exact-case tie-break is an equivalent mutation everywhere: no test can catch it, and none should.</li>
 <li><strong>UI (Vitest with <code>HttpTestingController</code>)</strong>:
   <ul>
   <li>the query string, including an apostrophe, spaces and <code>&amp;+#</code></li>
@@ -271,22 +302,29 @@ No <code>createDuty</code> (decision 7).</td></tr>
 <ul>
 <li><strong>Data impact:</strong> none. There is no migration and existing rows are untouched. A Development database used for the 006 QA may already contain the injected rows from that demonstration; QA must start from a fresh database.</li>
 <li><strong>Backward compatibility:</strong> all breaks are listed in section 5. The API is pre-release and its only consumer, the UI, changes in the same PR. The external feed must send <code>dutyStartDate</code>, expect 201, and stop relying on cross-person duplicate blocking.</li>
-<li><strong>Date offsets (verified by probe):</strong> System.Text.Json converts a value with a non-zero offset to server local time. In the UTC container, <code>2024-01-01T23:30:00-05:00</code> becomes 2024-01-02. This is unchanged from today. The contract tells clients to send <code>YYYY-MM-DD</code>; date-only semantics are in task 009's scope.</li>
+<li><strong>Date offsets (verified by probe; corrected in Amendment 1):</strong> System.Text.Json converts a value with an explicit numeric offset, including <code>+00:00</code>, to server local time. In the UTC container, <code>2024-01-01T23:30:00-05:00</code> becomes 2024-01-02. Under Asia/Tokyo, <code>2024-01-01T23:30:00+00:00</code> also becomes 2024-01-02. A value ending in <code>Z</code> is not converted and keeps its written date in every time zone tested (UTC, America/Chicago, Asia/Tokyo). This is unchanged from before the task. The contract tells clients to send <code>YYYY-MM-DD</code>; date-only semantics are in task 009's scope.</li>
 <li><strong>Character rule on titles:</strong> a title such as <code>Commander/Pilot</code> or <code>EVA &amp; Robotics</code> is now 400. This is accepted by the acceptance criteria ("the same shared length and character rule"), and all seeded titles and ranks pass.</li>
 <li><strong>Rollback:</strong> revert the PR. Nothing in the database depends on the new code.</li>
 <li><strong>Unverified items</strong> (cheap checks, done by api-dev in the first test run):
   <ul>
-  <li>U1: <code>[Required, ValidName]</code> on a <code>[FromQuery]</code> parameter gives the key <code>name</code>, the message "The name field is required." (lowercase, from the parameter name), and for whitespace-only input the Required message before the name-rule message. Check: tests G6/G7. If the order differs, the contract's order statement is the defect to report.</li>
-  <li>U2: EF Core 10 SQLite translates <code>d.DutyStartDate.Date == start</code> and <code>EF.Functions.Collate(d.DutyTitle, "NOCASE")</code>. Check: test CH9 seeds a duty at 10:00 and expects 409.</li>
-  <li>U3: Swashbuckle marks the <code>name</code> query parameter <code>required: true</code>. Check: test A20.</li>
-  <li>U4: the routing 404 for the removed path has an empty body in both TestServer and Kestrel. Check: test G12.</li>
+  <li>U1: <code>[Required, ValidName]</code> on a <code>[FromQuery]</code> parameter gives the key <code>name</code> and the message "The name field is required.". <strong>Outcome (Amendment 1): the key and message were right, but the whitespace-only statement was wrong.</strong> A whitespace-only value binds to null, so only the Required message appears (G7, G7b). The contract was amended.</li>
+  <li>U2: EF Core 10 SQLite translates <code>d.DutyStartDate.Date == start</code> and <code>EF.Functions.Collate(d.DutyTitle, "NOCASE")</code>. Check: test CH9 seeds a duty at 10:00 and expects 409. Outcome: as planned.</li>
+  <li>U3: Swashbuckle marks the <code>name</code> query parameter <code>required: true</code>. Check: test A20. Outcome: as planned.</li>
+  <li>U4: the routing 404 for the removed path has an empty body in both TestServer and Kestrel. Check: G12 (TestServer) and U4 (Kestrel). Outcome: as planned.</li>
   </ul></li>
+<li><strong>Known, deliberately out of scope (task 009)</strong> (Amendment 1; data.md section 6):
+  <ul>
+  <li>A <code>dutyStartDate</code> with a numeric offset is converted to server-local time before <code>.Date</code>, so the stored date can shift by a day depending on the server's time zone. The bounds still hold. <code>Z</code> and date-only values are not affected.</li>
+  <li>There is no transaction around read-decide-write and no partial unique index for the open duty. Two concurrent POSTs for a person who already has a duty can leave two open duties.</li>
+  <li>The rules 3-7 defects listed in section 6.</li>
+  </ul></li>
+<li><strong>Deployment follow-up (not this task, no task yet):</strong> outside Development the API starts and serves requests on a database with pending migrations. That is the only way a pre-index database can be reached. Non-Development environments should refuse to start while migrations are pending.</li>
 </ul>
 
 <h2>10. Subtasks</h2>
 <div class="table-wrap"><table>
 <tr><th>#</th><th>Platform</th><th>Work</th><th>Depends on</th></tr>
-<tr><td>A</td><td>api</td><td>Sections 3 and 4.1: security fix, GET, POST, validation, Program.cs, README, and every API test in tests.md (handler, HTTP, Kestrel, shape, controller). One api-dev, in commit order: (1) security fix with the failing hostile tests made green; (2) GET; (3) POST hardening; (4) README.</td><td>Contracts approved</td></tr>
+<tr><td>A</td><td>api</td><td>Sections 3 and 4.1: security fix, GET, POST, validation, Program.cs, README, and every API test in tests.md (handler, HTTP, Kestrel, shape, controller). One api-dev, in commit order: (1) security fix with the failing hostile tests made green; (2) GET; (3) POST hardening; (4) README. As merged: <code>ca6381c</code>, <code>15b2cd9</code>, <code>f443033</code>, <code>7bccfc7</code> in that order, then review fix <code>19084ec</code> (person-resolution order and the extra tests).</td><td>Contracts approved</td></tr>
 <tr><td>B</td><td>ui</td><td>Section 4.2 and the UI tests in tests.md.</td><td>Contracts approved; runs in parallel with A</td></tr>
 <tr><td>C</td><td>lead / QA</td><td>Integrate A and B, run both test suites, then QA as in section 8.</td><td>A, B</td></tr>
 </table></div>

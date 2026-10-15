@@ -1,4 +1,4 @@
-# Contract for task 007. Revision 1.
+# Contract for task 007. Revision 1, Amendment 1.
 # Endpoints this task changes: GET /AstronautDuty (new, query parameter), GET /AstronautDuty/{name} (removed),
 # POST /AstronautDuty (hardened). Person endpoints are unchanged from contract 006 revision 3.
 # JSON is camelCase. Every property under `required` is always present; nullability is explicit; property order is
@@ -9,14 +9,25 @@
 #   - POST /AstronautDuty: 201 (was 200) + Location; unknown person 404 (was 400 with a stack-trace page);
 #     duplicate 409 (was 400), scoped to the person, date part only, title ignoring ASCII case; dutyStartDate
 #     required and bounded; rank and dutyTitle follow NameRule and are trimmed; 415 non-JSON; 413 over 4096 bytes.
+# AMENDMENT 1 (after implementation, merged at 81f13f0). Documentation of observed behaviour only; no status code,
+# shape or field changes, nothing new for clients to build:
+#   - responses.ValidationFailed: a whitespace-only GET `name` (spaces, tab, LF) gives ONLY the required message
+#     (MVC binds a whitespace-only query value to null). Was: [required, NameRule]. Status 400 unchanged.
+#   - GET: a repeated `name` parameter binds the FIRST value (documented; one person, never merged).
+#   - Person resolution in both operations: exact-case match first, then lowest Id (only observable on a database
+#     that predates the unique name index). Was: lowest Id.
+#   - DutyDate: precise wording of offset handling (an explicit numeric offset is converted to server local time;
+#     `Z` is not).
 openapi: 3.0.3
 info:
   title: Stargate ACTS API - task 007 contract
-  version: "007-r1"
+  version: "007-r1-a1"
   description: >
     No endpoint has authentication or authorisation (unchanged by this task). Names, ranks and titles never alter
     the SQL that runs: they travel only as parameters. The person an operation applies to is resolved exactly once
-    per request (trimmed, exact, ASCII case-insensitive name match) and only that person's id is used afterwards.
+    per request (trimmed, exact, ASCII case-insensitive name match; if more than one stored name matches, which is
+    possible only on a database that predates the unique name index, the exact-case match wins, then the lowest
+    id) and only that person's id is used afterwards. GET /Person/{name} resolves a name the same way.
 paths:
   /AstronautDuty:
     get:
@@ -29,7 +40,9 @@ paths:
         `%` and `_` are not allowed characters anyway). 200 returns the person and all of their duties ordered by
         dutyStartDate descending, then id descending. A person with no astronaut assignment returns 200 with an
         empty `astronautDuties` (rule 2). An unknown name is 404. Order of checks: 400, then 404. No paging, no
-        other filters. Unknown query parameters are ignored.
+        other filters. Unknown query parameters are ignored. If `name` is repeated (`?name=a&name=b`) only the
+        FIRST value is used (framework binding); the values are never combined, and exactly one person (or 404)
+        results. Clients send `name` once.
       parameters:
         - name: name
           in: query
@@ -75,7 +88,9 @@ paths:
       tags: [AstronautDuty]
       summary: Add a duty to a person
       description: >
-        CHANGED. Adds a duty for the person whose stored name equals `name` (trimmed, exact, ASCII case-insensitive).
+        CHANGED. Adds a duty for the person whose stored name equals `name` (trimmed, exact, ASCII case-insensitive;
+        on a database that predates the unique name index, an exact-case match wins over a case-folded one, then the
+        lowest id, the same person GET /AstronautDuty?name= and GET /Person/{name} return).
         `name`, `rank` and `dutyTitle` are trimmed of ASCII whitespace, validated against NameRule and (rank,
         dutyTitle) stored trimmed. `dutyStartDate` is required; only its date part is used. Order of checks: 415
         (content type) and 413 (size), then 400 (body, NameRule, DutyDate), then 404 (unknown person), then 409.
@@ -175,10 +190,12 @@ components:
       type: string
       description: >
         ISO 8601 as accepted by System.Text.Json for DateTime. Clients SHOULD send a date only, "YYYY-MM-DD". A
-        date-time is accepted and its time part is discarded; a value with a non-zero UTC offset is first converted
-        to the server's local time by the JSON reader (pre-existing behaviour, date-only parsing is task 009). The
-        date part must be between 1900-01-01 and 2100-12-31 inclusive. JSON null or a missing property is 400
-        (required); an unparseable string is 400 (body-shape message).
+        date-time is accepted and its time part is discarded. A value with an explicit numeric UTC offset
+        (including "+00:00") is first converted by the JSON reader to the server's local time, so the stored date
+        can differ by one day depending on the server's time zone; a value ending in "Z" is not converted and keeps
+        its written date. Pre-existing behaviour; date-only parsing is task 009. The bounds are checked on the
+        date the server ends up with. The date part must be between 1900-01-01 and 2100-12-31 inclusive. JSON null
+        or a missing property is 400 (required); an unparseable string is 400 (body-shape message).
       example: "2026-03-01"
     CreateAstronautDutyRequest:
       type: object
@@ -270,8 +287,11 @@ components:
         Invalid input from [ApiController] model validation, before any handler runs; nothing is read from or
         written to the data tables. `errors` keys are compared ignoring case and are not to be branched on by
         clients. No message contains the submitted value.
-        GET query `name` (key "name"): missing or empty -> ["The name field is required."]; whitespace-only ->
-        ["The name field is required.", NameRule message]; other invalid -> [NameRule message].
+        GET query `name` (key "name"): missing (`/AstronautDuty`), present without a value (`?name`), empty
+        (`?name=`) or whitespace-only (for example `?name=%20%20`, `?name=%09`, `?name=%0A`) -> exactly
+        ["The name field is required."] (AMENDMENT 1: the query binder turns a whitespace-only value into null, so
+        the NameRule message is NOT added; this differs from the body fields below); other invalid ->
+        [NameRule message].
         POST body, for each of name, rank, dutyTitle (keys "Name"/"Rank"/"DutyTitle", any case): missing or null ->
         ["The <Name|Rank|DutyTitle> field is required."]; empty or whitespace-only string -> [required message,
         NameRule message] in that order; other invalid string -> [NameRule message].

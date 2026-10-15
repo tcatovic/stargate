@@ -19,9 +19,9 @@
   pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
   pre code { background:none; padding:0; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
-  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .amend { border-left:5px solid var(--accent); }
   .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
-  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); } .tag.amend { color:var(--accent); }
   .table-wrap { overflow-x:auto; }
   table { border-collapse:collapse; width:100%; font-size:.93rem; }
   th, td { text-align:left; vertical-align:top; padding:.42rem .5rem; border-bottom:1px solid var(--border); }
@@ -30,16 +30,86 @@
 </head>
 <body>
 <main>
-<p class="meta">Task 002 &middot; contract revision 1 (initial) &middot; status: awaiting approval together with <a href="../../plans/002-update-person.html">the plan</a></p>
+<p class="meta">Task 002 &middot; contract revision 1 + <strong>Amendment 1 (incl. 1b)</strong> &middot; describes the merged code at <code>55ae823</code> &middot; status: <strong>awaiting re-approval</strong> together with <a href="../../plans/002-update-person.html">the plan</a></p>
 <h1>Contract 002: Rename a person and enforce unique names</h1>
+
+<div class="card amend">
+<p><span class="tag amend">Amendment 1</span> <strong>Items 1-6 are documentation corrections with no behaviour change. Item 7 (Amendment 1b) records behaviour added during the review round, which is non-breaking.</strong> You re-approve all of it together. api-dev reported defects after running the merged implementation. I checked each against the code in <code>exercise1/api</code> and its tests, and probed the .NET 10.0.13 runtime where the code alone could not settle it.</p>
+<ol>
+<li><strong>Route-value binding messages</strong> (<a href="data.md">data.md</a> "Program.cs"; <a href="openapi.yaml">openapi.yaml</a> ValidationFailed).
+  <ul>
+    <li>Revision 1 set only the three <em>property</em> accessors. That still let <code>/Person/99999999999</code> echo the value (<code>The value '99999999999' is not valid.</code>), because action parameters use the <em>non-property</em> variants.</li>
+    <li>The contract now also requires <code>SetNonPropertyAttemptedValueIsInvalidAccessor(_ =&gt; "The value is not valid.")</code> and <code>SetNonPropertyValueMustBeANumberAccessor(() =&gt; "The value must be a number.")</code>. The implementation already has both (<code>Program.cs:17-18</code>).</li>
+    <li>Resulting bodies:
+      <ul>
+        <li><code>PUT /Person/abc</code> (also <code>1.5</code>, <code>99999999999</code>, <code>notanumber</code>) returns <code>errors: {"personId":["The value is not valid."]}</code>.</li>
+        <li><code>0</code> and <code>-1</code> return the <code>[Range]</code> message <code>The field personId must be between 1 and 2147483647.</code></li>
+      </ul></li>
+    <li>tests.md P8 adds <code>notanumber</code> and <code>1.5</code>.</li>
+  </ul></li>
+<li><strong>415 body</strong> (openapi.yaml, types.ts, tests.md P9).
+  <ul>
+    <li>Revision 1 said the 415 body is <code>ProblemDetails</code>. It actually depends on the request:
+      <ul>
+        <li>A non-JSON Content-Type such as <code>text/plain</code> is rejected by endpoint routing, and the 415 has an <strong>empty body</strong>.</li>
+        <li>A missing Content-Type header gives a 415 with a <code>ProblemDetails</code> body.</li>
+      </ul></li>
+    <li>Clients must key on the 415 status only. The UI already treats 415 as a propagated <code>HttpErrorResponse</code>, so nothing changes for it.</li>
+  </ul></li>
+<li><strong>JSON property order</strong> (cosmetic). The body is written as <code>person, success, message, responseCode</code>. Order is not significant, and the examples are reordered to match.</li>
+<li><strong>Invisible set made reviewable</strong> (data.md).
+  <ul>
+    <li>The literal invisible characters are replaced by the implementation's <code>&#92;uXXXX</code> escapes and a table of 28 code points, with names and categories.</li>
+    <li>openapi.yaml's <code>NamePattern</code> describes the same set and states the count.</li>
+  </ul></li>
+<li><strong>U+180E: the report was wrong, and the actual behaviour is now documented.</strong>
+  <ul>
+    <li>The report said <code>string.Trim()</code> removes a leading or trailing U+180E. It does not. On .NET 10.0.13, <code>char.IsWhiteSpace((char)0x180E)</code> is <code>false</code> (category Cf since Unicode 6.3), and a probe confirmed that <code>"Ada" + (char)0x180E</code> keeps its length (4) after <code>Normalize</code>.</li>
+    <li>So U+180E is rejected anywhere in a name, edges included, with a <strong>400</strong>. It is never silently dropped, and it is not in the trim set.</li>
+    <li>data.md now defines the trim set exactly: the 25 <code>char.IsWhiteSpace</code> code points. Since 1b, the API and the migration use the same set.</li>
+    <li>tests.md R13 asks for the two edge cases. They are still missing from the merged tests (see "Open" below).</li>
+  </ul></li>
+<li><strong>Read-back after update finds no row: 404</strong> (data.md step 5, openapi.yaml 404).
+  <ul>
+    <li>If the person is deleted between the save and the read-back, the handler returns the same 404 envelope as for an unknown id. A 200 with <code>person: null</code> is never returned.</li>
+    <li>Now tested by H17.</li>
+  </ul></li>
+<li><span class="tag ok">NON-breaking</span> <span class="tag warn">needs re-approval</span> <strong>Amendment 1b: behaviour added during the review round</strong> (commits <code>72bb7b2</code> and <code>fab7b22</code>, merged as <code>55ae823</code>).
+  <ul>
+    <li><strong>The migration trims and guards on the same whitespace set as the API.</strong>
+      <ul>
+        <li><code>AddUniquePersonNameIndex.TrimCharacterCodes</code> lists the 25 <code>char.IsWhiteSpace</code> code points, not only space, tab, LF and CR.</li>
+        <li>The guard now also aborts, with a clear message and no data change, when any name is empty once trimmed.</li>
+        <li>The abort message changed. It now contains "or are empty once trimmed", and the listing hint is <code>SELECT Id, Name FROM Person ORDER BY lower(trim(Name));</code>.</li>
+        <li>Tests M9-M13.</li>
+      </ul></li>
+    <li><strong>Raw length bound.</strong> A name longer than <code>InputRules.MaxRawLength</code> = 800 characters as sent is rejected before normalisation, by <code>[ValidName]</code> (400, key <code>Name</code>) and in the handler. Tests R23, H18 and P16.</li>
+    <li><strong>Request body limit.</strong>
+      <ul>
+        <li><code>[RequestSizeLimit(4096)]</code> on <code>PUT /Person/{personId}</code>: on Kestrel, a larger body gets <strong>413</strong>, and the body of that response is unspecified. Every valid name fits.</li>
+        <li>The in-memory TestServer does not enforce the limit, so P17 accepts 413 or 400. The 413 is a QA check on real Kestrel.</li>
+        <li>413 does not appear in the generated Swagger.</li>
+      </ul></li>
+    <li><strong>Concurrent delete between load and save.</strong> <code>DbUpdateConcurrencyException</code> maps to the same 404 "Person not found" as the empty read-back. Test H16.</li>
+    <li><strong>Validation order.</strong> The 400 checks run before the 404 lookup:
+      <ul>
+        <li><code>PUT /Person/999999</code> with an invalid name gives 400, not 404 (P18a).</li>
+        <li><code>PUT /Person/0</code> with a valid name gives 400 with key <code>personId</code>, from <code>[Range]</code> (P18b).</li>
+      </ul></li>
+    <li>Also documented, unchanged from <code>main</code>: supplementary-plane letters (surrogate pairs) are rejected (R22). P7 checks that body-shape 400s do not echo submitted tokens.</li>
+  </ul></li>
+</ol>
+<p><strong>Open (test gap, no code change):</strong> the merged tests do not yet cover the R13 U+180E edge cases. U+180E before or after a name gives 400 (verified by probe), but only an inner U+180E is tested.</p>
+</div>
+
 <p>api-dev and ui-dev build against this contract in parallel. The machine files are <a href="openapi.yaml">openapi.yaml</a>, <a href="data.md">data.md</a>, <a href="types.ts">types.ts</a> and <a href="tests.md">tests.md</a>.</p>
 
 <h2>Changes you are approving</h2>
-<div class="card warn"><p><span class="tag warn">alters data</span> <strong>Migration trims existing names</strong> (spaces, tab, CR, LF at either end). It runs only after a guard has proven that trimming creates no collision. If any names are equal ignoring ASCII case and surrounding whitespace, the migration aborts with a clear message and changes nothing. See plan Q1.</p></div>
+<div class="card warn"><p><span class="tag warn">alters data</span> <strong>Migration trims existing names</strong>. It removes whitespace at either end, using the same 25 Unicode whitespace characters that the API trims (Amendment 1b). It runs only after a guard has proven two things: trimming creates no collision, and no name becomes empty. If either fails, the migration aborts with a clear message and changes nothing. See plan Q1.</p></div>
 <div class="card warn"><p><span class="tag warn">behaviour change</span> <strong><code>POST /Person</code> (code not edited):</strong> a duplicate that differs only in case, or is identical, is now rejected by the database. The existing controller catch returns <strong>500</strong> <code>{success:false, message:"An error occurred while saving the entity changes. See the inner exception for details.", responseCode:500}</code>. It used to be 200 and created a duplicate. Padded names (<code>"Ada "</code>) still insert. Task 006 fixes both. See plan Q2.</p></div>
 <div class="card"><p><span class="tag ok">non-breaking for ASCII</span> <strong>Shared name rule tightened</strong> (also applies to <code>GET /Person</code> filters and <code>GET /Person/{name}</code>). These now return 400:</p>
 <ul>
-<li>invisible letters and marks (U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B-U+180F, U+3164, U+FE00-U+FE0F, U+FFA0)</li>
+<li>invisible letters and marks: 28 code points, U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B-U+180F, U+3164, U+FE00-U+FE0F, U+FFA0 (named in <a href="data.md">data.md</a>)</li>
 <li>a combining mark that does not follow a letter</li>
 <li>more than 3 marks in a row</li>
 </ul>
@@ -47,26 +117,27 @@
 <p>There are no breaking changes to existing response shapes.</p>
 
 <h2>New endpoint: <code>PUT /Person/{personId}</code></h2>
-<p>The body is <code>{ "name": "..." }</code>. The JSON content type is required.</p>
+<p>The body is <code>{ "name": "..." }</code>, at most 4096 bytes. The JSON content type is required. Property order in responses is not significant. Validation (400) always runs before the lookup (404) and the uniqueness check (409).</p>
 <div class="table-wrap"><table>
 <thead><tr><th>Status</th><th>When</th><th>Body</th></tr></thead>
 <tbody>
-<tr><td><strong>200</strong></td><td>Renamed, or already had that exact name. Idempotent.</td><td><code>{success:true, message:"Successful", responseCode:200, person:{personId, name, currentRank, currentDutyTitle, careerStartDate, careerEndDate}}</code>. The person shape is unchanged from <code>GET /Person</code>.</td></tr>
-<tr><td><strong>400</strong></td><td>Invalid name, missing or malformed body, or <code>personId</code> not an integer or below 1.</td><td><code>ValidationProblemDetails</code>, the same as task 001. It never echoes input.</td></tr>
-<tr><td><strong>404</strong></td><td>Unknown id.</td><td><code>{success:false, message:"Person not found", responseCode:404, person:null}</code></td></tr>
-<tr><td><strong>409</strong></td><td>Another person has the name, ignoring ASCII case and surrounding whitespace, after NFC. This applies to both the pre-check and the database index (race).</td><td><code>{success:false, message:"A person with this name already exists", responseCode:409, person:null}</code></td></tr>
-<tr><td><strong>415</strong></td><td>Not JSON.</td><td><code>ProblemDetails</code></td></tr>
+<tr><td><strong>200</strong></td><td>Renamed, or already had that exact name. Idempotent.</td><td><code>{person:{personId, name, currentRank, currentDutyTitle, careerStartDate, careerEndDate}, success:true, message:"Successful", responseCode:200}</code>. The person shape is unchanged from <code>GET /Person</code>, and <code>person</code> is never null.</td></tr>
+<tr><td><strong>400</strong></td><td>Invalid name (including over 800 characters as sent), missing or malformed body, or <code>personId</code> not an integer or below 1.</td><td><code>ValidationProblemDetails</code>, the same as task 001. It never echoes input. Example for <code>/Person/abc</code>: <code>errors: {"personId":["The value is not valid."]}</code>.</td></tr>
+<tr><td><strong>404</strong></td><td>Unknown id, or the row was deleted concurrently (between load and save, or before the read-back).</td><td><code>{person:null, success:false, message:"Person not found", responseCode:404}</code></td></tr>
+<tr><td><strong>409</strong></td><td>Another person has the name, ignoring ASCII case and surrounding whitespace, after NFC. This applies to both the pre-check and the database index (race).</td><td><code>{person:null, success:false, message:"A person with this name already exists", responseCode:409}</code></td></tr>
+<tr><td><strong>413</strong></td><td>(1b) Body over 4096 bytes, on Kestrel.</td><td>Unspecified. Key on the status only.</td></tr>
+<tr><td><strong>415</strong></td><td>Not JSON.</td><td>Empty for a non-JSON Content-Type; <code>ProblemDetails</code> when the header is missing. Key on the status only.</td></tr>
 <tr><td><strong>500</strong></td><td>Real fault.</td><td>Empty in Production.</td></tr>
 </tbody>
 </table></div>
-<p><strong>The name rule</strong> (defined once, reused by task 006): NFC-normalise and trim the name, then require 1 to 100 characters, made of letters (each followed by at most 3 combining marks), ASCII digits, space, period, apostrophe and hyphen, with no invisible code points. The name is stored in that normalised form.</p>
+<p><strong>The name rule</strong> (defined once, reused by task 006): reject more than 800 characters as sent. Otherwise NFC-normalise the name and trim it (Unicode whitespace), then require 1 to 100 characters, made of letters (each followed by at most 3 combining marks), ASCII digits, space, period, apostrophe and hyphen, with no invisible code points. The name is stored in that normalised form.</p>
 <p><strong>Rename to own name or a different casing of it</strong> succeeds. Rank, duty title and duties are never touched. There is no <code>Location</code> header.</p>
 
 <h2>Database</h2>
 <ul>
 <li><code>Person.Name</code> becomes <code>TEXT COLLATE NOCASE NOT NULL</code>, with unique index <code>IX_Person_Name</code>, added by the new migration <code>AddUniquePersonNameIndex</code>. Existing migrations are untouched.</li>
 <li>Case folding is ASCII-only (SQLite), so <code>Émile</code> and <code>émile</code> are distinct. This is the accepted decision from task 001.</li>
-<li>Stored names written before this task are not NFC-normalised.</li>
+<li>Stored names written before this task are not NFC-normalised. The migration trims the same whitespace set as the API.</li>
 <li>Down drops the index and the collation. Trimmed names stay trimmed.</li>
 </ul>
 
@@ -75,13 +146,14 @@
 <ul>
 <li>It sends <code>PUT /api/Person/{personId}</code> with body <code>{name}</code>.</li>
 <li>It emits <code>{status:'updated', person}</code>, <code>{status:'notFound'}</code> (404), <code>{status:'conflict'}</code> (409) or <code>{status:'invalid', errors}</code> (400).</li>
-<li>Other errors propagate.</li>
+<li>Other errors propagate, including 413 and 415.</li>
 </ul>
-<p>The new types in <code>models.ts</code> are <code>UpdatePersonRequest</code>, <code>UpdatePersonResult</code> and <code>UpdatePersonOutcome</code>. There is no screen.</p>
+<p>The new types in <code>models.ts</code> are <code>UpdatePersonRequest</code>, <code>UpdatePersonResult</code> and <code>UpdatePersonOutcome</code>. Amendment 1 does not change them. There is no screen.</p>
 
 <h2>Not decided by this contract</h2>
 <ul>
-<li>The exact <code>errors</code> keys for body-shape failures. They are framework-defined, and clients must not depend on them. Name-rule failures use <code>Name</code> (compare case-insensitively). This is unverified and is checked by the first HTTP test.</li>
+<li>The exact <code>errors</code> keys for body-shape failures. They are framework-defined, and clients must not depend on them. Name-rule failures use <code>Name</code> (compare case-insensitively), which the HTTP tests confirm.</li>
+<li>The body of a 413.</li>
 </ul>
 </main>
 </body>

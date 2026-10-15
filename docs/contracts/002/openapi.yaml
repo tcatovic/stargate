@@ -1,6 +1,17 @@
-# Contract for task 002: rename a person; shared name rule. Revision 1.
+# Contract for task 002: rename a person; shared name rule. Revision 1, Amendment 1 (incl. 1b).
 # Only endpoints this task adds or changes. JSON is camelCase (MVC JsonSerializerDefaults.Web).
 # Every property listed under `required` is always present in the body; nullability is explicit.
+# JSON property order is not significant (the server writes `person` first); clients must not depend on it.
+# Amendment 1 (documentation only, no behaviour change). Changes:
+#   - 404 also covers an empty read-back after the update.
+#   - The 415 body may be empty; clients key on the status only.
+#   - ValidationFailed documents the non-echoing personId messages and gives a personId example.
+#   - NamePattern now says the invisible set has 28 code points, U+180E included (see data.md).
+# Amendment 1b (behaviour added in the review round; NON-breaking). Changes:
+#   - A raw name over 800 characters is a 400.
+#   - A body over 4096 bytes is a 413 on Kestrel.
+#   - A row deleted between load and save is a 404.
+#   - Validation (400) always comes before 404/409.
 openapi: 3.0.3
 info:
   title: Stargate ACTS API - task 002 contract
@@ -17,6 +28,10 @@ paths:
         renaming to the person's own name or a different casing of it succeeds. Idempotent: repeating the same
         request yields the same state and the same 200 body. Only Person.Name changes; AstronautDetail and
         AstronautDuty rows are never read or written. No Location header.
+        Order of checks (Amendment 1b): all rejections that do not need the database come first. That covers a
+        non-JSON content type (415), a body over the size limit (413) and route and body validation (400). Only
+        then do the lookup (404) and the uniqueness check (409) run. So an unknown id with an invalid name is 400,
+        and personId 0 with a valid name is 400.
       parameters:
         - name: personId
           in: path
@@ -26,29 +41,36 @@ paths:
           schema: { type: integer, format: int32, minimum: 1, maximum: 2147483647 }
       requestBody:
         required: true
+        description: At most 4096 bytes (Amendment 1b; larger bodies get 413 on Kestrel).
         content:
           application/json:
             schema: { $ref: "#/components/schemas/UpdatePersonRequest" }
             example: { name: "Mira Okafor-Lindqvist" }
       responses:
         "200":
-          description: Renamed (or already had that exact name). `person` is non-null and reflects the stored name.
+          description: >
+            Renamed (or already had that exact name). `person` is non-null and reflects the stored name. Property order
+            in the body is not significant (actual order: person, success, message, responseCode).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UpdatePersonResult" }
               example:
+                person: { personId: 1, name: Mira Okafor-Lindqvist, currentRank: "", currentDutyTitle: "", careerStartDate: null, careerEndDate: null }
                 success: true
                 message: Successful
                 responseCode: 200
-                person: { personId: 1, name: Mira Okafor-Lindqvist, currentRank: "", currentDutyTitle: "", careerStartDate: null, careerEndDate: null }
         "400":
           $ref: "#/components/responses/ValidationFailed"
         "404":
-          description: No person with this id. Nothing changed.
+          description: >
+            No person with this id. Nothing changed. The same body is also returned if the person is deleted
+            concurrently: between the load and the save (EF DbUpdateConcurrencyException, Amendment 1b), or between
+            the save and the read-back (Amendment 1). Both are only possible out of band today, since there is no
+            delete endpoint. A 200 with `person: null` is never returned.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UpdatePersonResult" }
-              example: { success: false, message: Person not found, responseCode: 404, person: null }
+              example: { person: null, success: false, message: Person not found, responseCode: 404 }
         "409":
           description: >
             Another person already has this name (ignoring ASCII case and surrounding whitespace, after NFC).
@@ -57,9 +79,18 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/UpdatePersonResult" }
-              example: { success: false, message: A person with this name already exists, responseCode: 409, person: null }
+              example: { person: null, success: false, message: A person with this name already exists, responseCode: 409 }
+        "413":
+          description: >
+            (Amendment 1b) Request body larger than 4096 bytes ([RequestSizeLimit(4096)], enforced by Kestrel). Nothing
+            changed and nothing is echoed. The body is unspecified; clients key on the status only. Not listed in the
+            generated Swagger document (no ProducesResponseType), and not enforced by the in-memory TestServer.
         "415":
-          description: Content-Type is not application/json. Body is ProblemDetails (framework client-error mapping).
+          description: >
+            Unsupported Content-Type. Clients must key on the 415 status only and must not read the body (Amendment 1).
+            If a Content-Type is present and is not application/json (e.g. text/plain), the body is EMPTY and there is
+            no Content-Type header (rejected by endpoint routing). If the Content-Type header is missing, the body is a
+            ProblemDetails (application/problem+json, status 415). Nothing changed.
           content:
             application/problem+json:
               schema: { $ref: "#/components/schemas/ProblemDetails" }
@@ -76,21 +107,36 @@ components:
       description: >
         Invalid input, produced by [ApiController] model validation before any handler runs. Causes:
         personId not an integer or < 1; missing or empty body; body not a JSON object or `name` not a string;
-        `name` null or missing; `name` empty or whitespace-only after trimming; `name` longer than 100 UTF-16 code
+        `name` null or missing; `name` longer than 800 UTF-16 code units as sent (raw, before any normalisation;
+        Amendment 1b); `name` empty or whitespace-only after trimming; `name` longer than 100 UTF-16 code
         units after NFC and trimming; `name` not matching NamePattern after NFC and trimming.
         `errors` keys: `Name` for name-rule failures (compare case-insensitively), `personId` for the route value,
         a `$`-prefixed JSON path or `""`/`request` for body-shape failures. Clients must not branch on keys or
-        parse messages. Messages never contain the submitted value.
+        parse messages. Messages never contain the submitted value. For personId (Amendment 1): a value that does
+        not bind to Int32 (abc, 1.5, 99999999999) gives "The value is not valid."; 0 or -1 gives the [Range]
+        message "The field personId must be between 1 and 2147483647.".
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/ValidationProblemDetails" }
-          example:
-            type: https://tools.ietf.org/html/rfc9110#section-15.5.1
-            title: One or more validation errors occurred.
-            status: 400
-            errors:
-              Name: ["Use only letters, digits, spaces, hyphens, apostrophes and periods (at most 100 characters)."]
-            traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
+          examples:
+            invalidName:
+              summary: Name fails the shared rule
+              value:
+                type: https://tools.ietf.org/html/rfc9110#section-15.5.1
+                title: One or more validation errors occurred.
+                status: 400
+                errors:
+                  Name: ["Use only letters, digits, spaces, hyphens, apostrophes and periods (at most 100 characters)."]
+                traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
+            invalidPersonId:
+              summary: PUT /Person/abc (route value does not bind; the value is not echoed)
+              value:
+                type: https://tools.ietf.org/html/rfc9110#section-15.5.1
+                title: One or more validation errors occurred.
+                status: 400
+                errors:
+                  personId: ["The value is not valid."]
+                traceId: 00-b592ff87ebdeb2369b48cc31236255fa-8d67a3baab9c4696-00
     ServerError:
       description: Unexpected fault. Empty body in Production (developer exception page in Development only). Clients must not parse it.
 
@@ -99,8 +145,10 @@ components:
       description: >
         .NET regular expression (not ECMAScript), applied to the NFC-normalised, trimmed value. A letter followed by
         at most 3 combining marks, or an ASCII digit, space, period, apostrophe (U+0027) or hyphen; never one of the
-        invisible code points U+034F U+115F U+1160 U+17B4 U+17B5 U+180B-U+180F U+3164 U+FE00-U+FE0F U+FFA0.
-        Length 1..100 is checked separately.
+        28 invisible code points U+034F U+115F U+1160 U+17B4 U+17B5 U+180B-U+180F U+3164 U+FE00-U+FE0F U+FFA0
+        (table with names in data.md). U+180E (Mongolian vowel separator, Cf) falls in that range and is
+        rejected anywhere, edges included: .NET string.Trim() does not remove it.
+        Supplementary-plane letters (surrogate pairs) are rejected. Length 1..100 is checked separately.
       type: string
       minLength: 1
       maxLength: 100
@@ -114,9 +162,11 @@ components:
         name:
           type: string
           nullable: false
+          maxLength: 800
           description: >
-            New name. Surrounding whitespace is removed and the value is NFC-normalised before validation (NamePattern,
-            1..100 code units), comparison and storage.
+            New name. At most 800 UTF-16 code units as sent (Amendment 1b; checked before normalisation). The value
+            is NFC-normalised and leading/trailing whitespace (the 25 char.IsWhiteSpace code points, see data.md) is
+            removed before validation (NamePattern, 1..100 code units), comparison and storage.
 
     BaseResponse:
       type: object
@@ -171,6 +221,9 @@ components:
         traceId: { type: string, nullable: false }
 
     ProblemDetails:
+      description: >
+        Only sent with 415 when the request has no Content-Type header. A 415 for a non-JSON Content-Type has an
+        empty body. Clients must not read either.
       type: object
       required: [type, title, status, traceId]
       properties:

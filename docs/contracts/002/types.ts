@@ -3,6 +3,9 @@
  * UpdatePersonRequest, UpdatePersonResult and UpdatePersonOutcome with identical names, fields, types and
  * nullability. Existing interfaces (BaseResponse, PersonAstronaut, ValidationProblemDetails, ...) are unchanged and
  * are repeated here only for reference. StargateApiContract documents the new method; it is not copied into models.ts.
+ *
+ * Amendment 1 (incl. 1b): comments only, no type changes. The 415 body may be empty, and JSON property order is
+ * not significant. A body over 4096 bytes gets 413, and a name over 800 characters gets 400.
  */
 import { Observable } from 'rxjs';
 
@@ -38,7 +41,10 @@ export interface UpdatePersonRequest {
   name: string;
 }
 
-/** NEW. Body of PUT /Person/{personId} for 200, 404 and 409. `person` is non-null on 200, null on 404 and 409. */
+/**
+ * NEW. Body of PUT /Person/{personId} for 200, 404 and 409. `person` is non-null on 200, null on 404 and 409.
+ * Property order on the wire is not significant (the server sends `person` first).
+ */
 export interface UpdatePersonResult extends BaseResponse {
   person: PersonAstronaut | null;
 }
@@ -61,7 +67,8 @@ export interface StargateApiContract {
    * - 409 -> `{ status: 'conflict' }`.
    * - 400 -> `{ status: 'invalid', errors }`, where `errors` is the body's `errors` object when the body is an object
    *   whose `errors` is a non-null object, otherwise `{}`.
-   * - Any other status (0, 415, 500, ...) -> the HttpErrorResponse propagates unchanged.
+   * - Any other status (0, 413, 415, 500, ...) -> the HttpErrorResponse propagates unchanged. Key on the status only:
+   *   the 413 body is unspecified, the 415 body may be empty or a ProblemDetails, and a 500 body may be empty.
    */
   updatePerson(personId: number, name: string): Observable<UpdatePersonOutcome>;
 }

@@ -20,7 +20,7 @@
   pre { background: var(--code); padding:.75rem; border-radius:8px; overflow-x:auto; }
   pre code { background:none; padding:0; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:.7rem 1rem; margin:.8rem 0; }
-  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); }
+  .bad { border-left:5px solid var(--bad); } .warn { border-left:5px solid var(--warn); } .ok { border-left:5px solid var(--ok); } .amend { border-left:5px solid var(--accent); }
   .tag { display:inline-block; font-size:.76rem; font-weight:600; padding:.08rem .45rem; border-radius:999px; border:1px solid currentColor; white-space:nowrap; }
   .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
   .table-wrap { overflow-x:auto; }
@@ -31,8 +31,26 @@
 </head>
 <body>
 <main>
-<p class="meta">Task 002 &middot; plan revision 1 &middot; baseline <code>main</code> at <code>fb80f5b</code> (tasks 001, 003, 004, 005 merged) &middot; branch <code>task/002-update-person</code> &middot; status: awaiting approval together with <a href="../contracts/002/contract.html">contract 002</a></p>
+<p class="meta">Task 002 &middot; plan revision 1 + contract Amendment 1 (incl. 1b) &middot; baseline <code>main</code> at <code>fb80f5b</code> (tasks 001, 003, 004, 005 merged) &middot; branch <code>task/002-update-person</code> (implementation merged at <code>55ae823</code>) &middot; status: awaiting re-approval together with <a href="../contracts/002/contract.html">contract 002</a></p>
 <h1>Plan 002: Rename a person and enforce unique names</h1>
+<div class="card amend"><p><strong>Contract Amendment 1</strong> (details at the top of <a href="../contracts/002/contract.html">contract.html</a>). This plan changes only where it repeated the same claims.</p>
+<ul>
+<li><strong>Amendment 1</strong> (documentation only, no behaviour change):
+  <ul>
+    <li>415 body: 4.1, and item 2 of the unverified list in 9.</li>
+    <li>Empty read-back returns 404: 4.1.</li>
+    <li>The invisible set is written as escapes: 4.2.</li>
+    <li>The two non-property binding-message accessors: 4.6 and 5.</li>
+  </ul></li>
+<li><strong>Amendment 1b</strong> (behaviour added during the review round; non-breaking):
+  <ul>
+    <li>The migration trims and guards on the full .NET whitespace set, and aborts on a name that is empty once trimmed: 4.3, 6, 9.</li>
+    <li>Raw input over 800 characters is rejected before normalisation: 4.2.</li>
+    <li><code>[RequestSizeLimit(4096)]</code>, giving 413 on Kestrel: 4.1, 5, 9.</li>
+    <li><code>DbUpdateConcurrencyException</code> returns 404: 4.1.</li>
+    <li>Validation runs before the lookup: 4.1.</li>
+  </ul></li>
+</ul></div>
 
 <h2>1. Summary and verdict</h2>
 <p>This task adds <code>PUT /Person/{personId}</code> with body <code>{ "name": "..." }</code>. It renames the person and returns 200 with the person in the existing <code>PersonAstronaut</code> shape. An unknown id returns 404, invalid input returns 400, and a name already used by another person (ignoring ASCII case and surrounding whitespace) returns 409. A new migration makes <code>Person.Name</code> <code>COLLATE NOCASE</code> with a unique index. The migration aborts and changes nothing if duplicates exist. A unique-constraint violation that gets past the pre-check is mapped to 409. The shared name rule in <code>InputRules</code> gets stricter: input is NFC-normalised, invisible letters and marks are rejected, and combining marks are limited. The read side (task 001 endpoints) also NFC-normalises its input. The UI gets <code>StargateApi.updatePerson</code>.</p>
@@ -66,25 +84,27 @@
 
 <h3>4.1 Endpoint</h3>
 <ul>
-<li><code>PUT /Person/{personId}</code>, with <code>[Consumes("application/json")]</code> and body <code>UpdatePersonRequest { [Required, ValidName] string? Name }</code>. The route has no <code>:int</code> constraint (see 4.6). <code>personId</code> is <code>int</code> with <code>[Range(1, int.MaxValue)]</code>.</li>
+<li><code>PUT /Person/{personId}</code>, with <code>[Consumes("application/json")]</code>, <code>[RequestSizeLimit(4096)]</code> (Amendment 1b) and body <code>UpdatePersonRequest { [Required, ValidName] string? Name }</code>. The route has no <code>:int</code> constraint (see 4.6). <code>personId</code> is <code>int</code> with <code>[Range(1, int.MaxValue)]</code>.</li>
 <li>The controller is thin: it sends MediatR <code>UpdatePerson { PersonId, Name }</code> and returns <code>this.GetResponse(result)</code>. There is no try/catch.</li>
-<li>Response <code>UpdatePersonResult : BaseResponse { PersonAstronaut? Person }</code>. This keeps the current person shape (task decision) and is the same field layout as <code>GetPersonByNameResult</code>, but it is its own type because task 008 deletes <code>GetPersonByName*</code>.
+<li>Validation order (Amendment 1b): route and body validation run before the handler. So an unknown id with an invalid name gives 400, not 404, and <code>personId</code> 0 with a valid name gives 400 (key <code>personId</code>).</li>
+<li>Response <code>UpdatePersonResult : BaseResponse { PersonAstronaut? Person }</code>. This keeps the current person shape (task decision) and is the same field layout as <code>GetPersonByNameResult</code>, but it is its own type because task 008 deletes <code>GetPersonByName*</code>. JSON property order is not significant; the server writes <code>person</code> first.
   <ul>
     <li><strong>200</strong>: <code>person</code> is non-null. It is the same projection as a <code>GET /Person</code> entry (rank and title <code>""</code> when unassigned, nullable dates).</li>
-    <li><strong>404</strong>: <code>{success:false, message:"Person not found", responseCode:404, person:null}</code>.</li>
+    <li><strong>404</strong>: <code>{success:false, message:"Person not found", responseCode:404, person:null}</code>. Also returned if the row is deleted concurrently, either between the load and the save (<code>DbUpdateConcurrencyException</code>, Amendment 1b) or before the read-back (Amendment 1).</li>
     <li><strong>409</strong>: <code>{success:false, message:"A person with this name already exists", responseCode:409, person:null}</code>. Messages never echo input.</li>
     <li><strong>400</strong>: the framework's <code>ValidationProblemDetails</code>, the same as task 001.</li>
-    <li><strong>415</strong>: <code>ProblemDetails</code> when the content type is not JSON.</li>
+    <li><strong>413</strong> (Amendment 1b): the body is over 4096 bytes, on Kestrel. The response body is unspecified.</li>
+    <li><strong>415</strong>: when the content type is not JSON. (Amendment 1) The body is empty for a non-JSON Content-Type and <code>ProblemDetails</code> when the header is missing. Clients key on the status only.</li>
     <li><strong>500</strong>: empty body in Production.</li>
   </ul></li>
 <li>There is no <code>Location</code> header. A 200 does not need one, and the only by-name route is removed by task 008.</li>
 <li>Handler steps:
   <ol>
-    <li><code>name = InputRules.Normalize(request.Name)</code>. Throw <code>ArgumentException</code> if <code>!InputRules.IsValidName(name)</code>. This is a defensive check for non-HTTP callers and is unreachable via HTTP.</li>
+    <li>If the raw name is at most <code>InputRules.MaxRawLength</code> (800) characters, <code>name = InputRules.Normalize(request.Name)</code>; otherwise <code>name</code> is empty, so the value is never normalised (Amendment 1b). Throw <code>ArgumentException</code> if <code>!InputRules.IsValidName(name)</code>. This is a defensive check for non-HTTP callers and is unreachable via HTTP.</li>
     <li>Load <code>Person</code> by id (tracked). If it does not exist, return 404.</li>
     <li>Pre-check: <code>AnyAsync(p =&gt; p.Id != id &amp;&amp; EF.Functions.Collate(p.Name, "NOCASE") == name)</code>. If one exists, return 409.</li>
-    <li>Set <code>person.Name = name</code>, then <code>SaveChangesAsync(ct)</code>, inside <code>catch (DbUpdateException ex) when (SqliteErrors.IsUniqueViolation(ex))</code>, which returns 409.</li>
-    <li>Read back the <code>PersonAstronaut</code> by id with a static parameterised Dapper SQL statement (the GET /Person projection plus <code>WHERE a.Id = @PersonId</code>), and return 200.</li>
+    <li>Set <code>person.Name = name</code>, then <code>SaveChangesAsync(ct)</code>. Catch <code>DbUpdateConcurrencyException</code> and return 404 (Amendment 1b). Catch <code>DbUpdateException ex</code> when <code>SqliteErrors.IsUniqueViolation(ex)</code> and return 409.</li>
+    <li>Read back the <code>PersonAstronaut</code> by id with a static parameterised Dapper SQL statement (the GET /Person projection plus <code>WHERE a.Id = @PersonId</code>), and return 200. If no row comes back (the person was deleted concurrently, out of band, since there is no delete endpoint yet), return the same 404 as step 2. A 200 never carries a null person.</li>
   </ol>
   It logs <code>personId</code> and the outcome only, never names.</li>
 <li>Idempotency: the same PUT twice gives the same final row and the same 200 body. Renaming to the person's own name is excluded from the pre-check, and if the value is byte-identical EF issues no UPDATE. A different casing of the person's own name updates the row and succeeds, because a row cannot conflict with itself in the unique index.</li>
@@ -94,8 +114,10 @@
 <h3>4.2 The shared name rule (InputRules), defined once for 002 and 006</h3>
 <pre><code>// Business/Validation/InputRules.cs (changed)
 public const int MaxLength = 100;
+public const int MaxRawLength = 8 * MaxLength; // 800; raw input over this is rejected before normalising (Amendment 1b)
 // Default-ignorable code points that Unicode classes as letters (Lo) or marks (Mn) and that render as nothing.
-private const string Invisible = @"͏ᅟᅠ឴឵᠋-᠏ㅤ︀-️ﾠ";
+// Written as regex escapes, never as literal characters (28 code points; table in data.md).
+private const string Invisible = @"&#92;u034F&#92;u115F&#92;u1160&#92;u17B4&#92;u17B5&#92;u180B-&#92;u180F&#92;u3164&#92;uFE00-&#92;uFE0F&#92;uFFA0";
 public const string AllowedCharactersPattern =
     @"^(?:(?![" + Invisible + @"])\p{L}(?:(?![" + Invisible + @"])\p{M}){0,3}|[0-9 .'-])+\z";
 public const string AllowedCharactersMessage =
@@ -104,7 +126,7 @@ public const string AllowedCharactersMessage =
 public static string Normalize(string value);
 /// True when 1 &lt;= normalized.Length &lt;= MaxLength and the pattern matches. Expects the output of Normalize.
 public static bool IsValidName(string normalized);</code></pre>
-<p>In words, a name is valid when, <strong>after NFC normalisation and trimming</strong>, it has 1 to 100 UTF-16 code units and is a sequence of:</p>
+<p>In words, a name is valid when it has at most 800 UTF-16 code units as sent, and, <strong>after NFC normalisation and trimming</strong>, it has 1 to 100 UTF-16 code units and is a sequence of:</p>
 <ul>
 <li>a letter (<code>\p{L}</code>) followed by 0 to 3 combining marks (<code>\p{M}</code>), or</li>
 <li>an ASCII digit, space, period, apostrophe (U+0027) or hyphen,</li>
@@ -119,7 +141,7 @@ public static bool IsValidName(string normalized);</code></pre>
 <li>Use a <code>[GeneratedRegex]</code> (CultureInvariant) or a static <code>Regex</code> with a 100 ms timeout.</li>
 </ul>
 <ul>
-<li><strong>Writes</strong> (this task's PUT and task 006's POST) use the new <code>[ValidName]</code> attribute (<code>Business/Validation/ValidNameAttribute.cs</code>). It validates <code>IsValidName(Normalize(value))</code>, treats <code>null</code> as valid (pair it with <code>[Required]</code>), and fails on non-strings. Handlers store <code>Normalize(value)</code>. NFC is applied in the model-validation step (inside the attribute) and again in the handler before comparing or storing. Both call the same function, so validation and storage cannot drift.</li>
+<li><strong>Writes</strong> (this task's PUT and task 006's POST) use the new <code>[ValidName]</code> attribute (<code>Business/Validation/ValidNameAttribute.cs</code>). It rejects raw strings over 800 characters, then validates <code>IsValidName(Normalize(value))</code>. It treats <code>null</code> as valid (pair it with <code>[Required]</code>), and fails on non-strings. Handlers store <code>Normalize(value)</code>. NFC is applied in the model-validation step (inside the attribute) and again in the handler before comparing or storing. Both call the same function, so validation and storage cannot drift.</li>
 <li><strong>Reads</strong> (task 001's <code>GET /Person</code> filters and <code>GET /Person/{name}</code>) keep their <code>[StringLength] + [RegularExpression(AllowedCharactersPattern)]</code> attributes. They pick up the new pattern automatically, applied to the raw value. <code>GetPeople</code> and <code>GetPersonByName</code> handlers replace <code>Trim()</code> with <code>InputRules.Normalize()</code>, so NFD input finds NFC-stored names. One edge case differs from writes: a raw query with 4 or more marks that NFC would compose down to 3 gets a 400 on read. That is harmless.</li>
 <li><strong>Contract impact on task 001 endpoints: non-breaking for ASCII.</strong> It is stricter for non-ASCII input with invisible letters or marks, a leading or stray mark, or 4 or more stacked marks (now 400 instead of 200 with no match). NFD input now matches NFC names. The 400 shape, the keys and the message are unchanged. The <code>pattern</code> string shown in Swagger for those parameters changes.</li>
 <li>Case folding stays ASCII-only (SQLite NOCASE). <code>Émile</code> and <code>émile</code> are distinct names. This matches the ASCII-only decision accepted in task 001, and it is a documented limit of rule 1 for non-ASCII letters.</li>
@@ -129,10 +151,11 @@ public static bool IsValidName(string normalized);</code></pre>
 <ul>
 <li>Model change (<code>PersonConfiguration</code>): <code>builder.Property(x =&gt; x.Name).UseCollation("NOCASE");</code> and <code>builder.HasIndex(x =&gt; x.Name).IsUnique();</code>, which gives the index <code>IX_Person_Name</code>.</li>
 <li>The new migration is generated with <code>dotnet ef migrations add AddUniquePersonNameIndex -o Business/Migrations --namespace StargateAPI.Migrations</code>. It updates the snapshot. Existing migrations are not touched.</li>
+<li>Trim set (Amendment 1b): the migration declares <code>public const string TrimCharacterCodes</code>, the 25 code points for which <code>char.IsWhiteSpace</code> is true. These are exactly what <code>string.Trim()</code> removes in the API, and test M9 asserts the equality. Below, <code>char(T)</code> means <code>char(TrimCharacterCodes)</code>.</li>
 <li><code>Up</code> runs, in this order:
   <ol>
-    <li><strong>Guard</strong> (<code>migrationBuilder.Sql</code>, the same temp-table and trigger pattern as task 003). It runs <code>RAISE(ABORT)</code> when <code>SELECT 1 FROM main."Person" GROUP BY trim("Name", char(32,9,10,13)) COLLATE NOCASE HAVING COUNT(*) &gt; 1</code> finds a row. The exact message is in <a href="../contracts/002/data.md">data.md</a>.</li>
-    <li><strong>Trim</strong>: <code>UPDATE "Person" SET "Name" = trim("Name", char(32,9,10,13)) WHERE "Name" &lt;&gt; trim("Name", char(32,9,10,13))</code>.</li>
+    <li><strong>Guard</strong> (<code>migrationBuilder.Sql</code>, the same temp-table and trigger pattern as task 003). It runs <code>RAISE(ABORT)</code> when <code>SELECT 1 FROM main."Person" GROUP BY trim("Name", char(T)) COLLATE NOCASE HAVING COUNT(*) &gt; 1</code> finds a row, or (Amendment 1b) when any <code>trim("Name", char(T)) = ''</code>. The exact message is in <a href="../contracts/002/data.md">data.md</a>.</li>
+    <li><strong>Trim</strong>: <code>UPDATE "Person" SET "Name" = trim("Name", char(T)) WHERE "Name" &lt;&gt; trim("Name", char(T))</code>.</li>
     <li>The generated <code>AlterColumn</code> (rebuild with <code>COLLATE NOCASE</code>) and <code>CreateIndex</code>.</li>
   </ol>
   The guard and the trim run in the first transaction, before EF's rebuild commits anything. If the guard aborts, nothing is committed (verified in probe 2). The guard uses the same trim set and collation that the index sees after the trim, so the later index creation cannot fail on duplicates.</li>
@@ -143,7 +166,7 @@ public static bool IsValidName(string normalized);</code></pre>
 </ul>
 
 <h3>4.4 Concurrency</h3>
-<p>The pre-check gives a fast 409 in the common case. The unique index is the guarantee. A rename that loses a race gets <code>DbUpdateException</code> with an inner <code>SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 }</code>, which the handler maps to 409. Any other database error (for example an FK violation, 787) is not mapped and stays a 500. The predicate lives in <code>Business/Data/SqliteErrors.cs</code> (<code>IsUniqueViolation(DbUpdateException)</code>) so that task 006 can reuse it. It is SQLite-specific and transitional, like <code>StarbaseDatabase</code>.</p>
+<p>The pre-check gives a fast 409 in the common case. The unique index is the guarantee. A rename that loses a race gets <code>DbUpdateException</code> with an inner <code>SqliteException { SqliteErrorCode: 19, SqliteExtendedErrorCode: 2067 }</code>, which the handler maps to 409. Any other database error (for example an FK violation, 787) is not mapped and stays a 500. The predicate lives in <code>Business/Data/SqliteErrors.cs</code> (<code>IsUniqueViolation(DbUpdateException)</code>) so that task 006 can reuse it. It is SQLite-specific and transitional, like <code>StarbaseDatabase</code>. A concurrent delete maps to 404, at either point (4.1).</p>
 
 <h3>4.5 UI</h3>
 <p><code>StargateApi.updatePerson(personId: number, name: string): Observable&lt;UpdatePersonOutcome&gt;</code> sends <code>PUT /api/Person/{personId}</code> with body <code>{ name }</code> exactly as given (the server normalises it). It maps the response as follows:</p>
@@ -152,14 +175,21 @@ public static bool IsValidName(string normalized);</code></pre>
 <li>404 maps to <code>{status:'notFound'}</code>.</li>
 <li>409 maps to <code>{status:'conflict'}</code>.</li>
 <li>400 maps to <code>{status:'invalid', errors}</code>.</li>
-<li>Any other error propagates.</li>
+<li>Any other error propagates, including 413 and 415.</li>
 </ul>
 <p>This follows <code>getPerson</code>, which already maps 404 to <code>null</code>, and gives a future edit form a typed result. There is no screen.</p>
 
 <h3>4.6 Smaller decisions</h3>
 <ul>
 <li>No route constraint on <code>{personId}</code>. With <code>{personId:int}</code>, <code>PUT /Person/abc</code> would match <code>GET /Person/{name}</code> by path and return 405 until task 008, which is confusing. Without it, binding fails and returns 400.</li>
-<li>The framework's binding message "The value 'abc' is not valid..." echoes input. Override it globally with <code>ModelBindingMessageProvider.SetAttemptedValueIsInvalidAccessor((_, _) =&gt; "The value is not valid.")</code> and <code>SetValueIsInvalidAccessor(_ =&gt; "The value is not valid.")</code> and <code>SetValueMustBeANumberAccessor(_ =&gt; "The value must be a number.")</code>. These only apply to non-body binding (route, query). All existing route and query parameters are strings, so no current response changes.</li>
+<li>The framework's binding message "The value 'abc' is not valid..." echoes input. Override it globally with five <code>ModelBindingMessageProvider</code> accessors:
+  <ul>
+    <li><code>SetAttemptedValueIsInvalidAccessor((_, _) =&gt; "The value is not valid.")</code></li>
+    <li><code>SetValueIsInvalidAccessor(_ =&gt; "The value is not valid.")</code></li>
+    <li><code>SetValueMustBeANumberAccessor(_ =&gt; "The value must be a number.")</code></li>
+    <li>(Amendment 1) the <em>non-property</em> variants, <code>SetNonPropertyAttemptedValueIsInvalidAccessor(_ =&gt; "The value is not valid.")</code> and <code>SetNonPropertyValueMustBeANumberAccessor(() =&gt; "The value must be a number.")</code>. Action parameters such as <code>personId</code> use these, and without them <code>/Person/99999999999</code> still echoes the value.</li>
+  </ul>
+  These apply only to non-body binding (route, query). All existing route and query parameters are strings, so no current response changes.</li>
 <li>The <code>GetPersonByName</code> exact-case tie-break SQL becomes dead (no case duplicates can exist). It is left unchanged, because task 008 deletes the file. Only its input normalisation changes.</li>
 </ul>
 
@@ -171,12 +201,12 @@ public static bool IsValidName(string normalized);</code></pre>
 <div class="table-wrap"><table>
 <thead><tr><th>File</th><th>Change</th></tr></thead>
 <tbody>
-<tr><td><code>Business/Validation/InputRules.cs</code></td><td>The new pattern (\z, invisible set, mark rules), <code>Normalize</code>, <code>IsValidName</code>. Update the class comment.</td></tr>
-<tr><td><code>Business/Validation/ValidNameAttribute.cs</code> (new)</td><td>A <code>ValidationAttribute</code> on properties and parameters, as in 4.2. Error message is <code>InputRules.AllowedCharactersMessage</code>.</td></tr>
+<tr><td><code>Business/Validation/InputRules.cs</code></td><td>The new pattern (\z, invisible set, mark rules), <code>MaxRawLength</code> (1b), <code>Normalize</code>, <code>IsValidName</code>. Update the class comment.</td></tr>
+<tr><td><code>Business/Validation/ValidNameAttribute.cs</code> (new)</td><td>A <code>ValidationAttribute</code> on properties and parameters, as in 4.2, including the raw bound. Error message is <code>InputRules.AllowedCharactersMessage</code>.</td></tr>
 <tr><td><code>Business/Commands/UpdatePerson.cs</code> (new)</td><td><code>UpdatePersonRequest</code> (body), <code>UpdatePerson : IRequest&lt;UpdatePersonResult&gt;</code>, <code>UpdatePersonHandler</code>, <code>UpdatePersonResult</code>. Uses <code>ILogger&lt;UpdatePersonHandler&gt;</code> and passes the <code>CancellationToken</code> everywhere.</td></tr>
 <tr><td><code>Business/Data/SqliteErrors.cs</code> (new)</td><td><code>IsUniqueViolation(DbUpdateException)</code>: true only when the inner exception is a <code>SqliteException</code> with extended code 2067.</td></tr>
-<tr><td><code>Controllers/PersonController.cs</code></td><td>Add the <code>UpdatePerson</code> action with <code>EndpointSummary</code>/<code>EndpointDescription</code>, <code>ProducesResponseType</code> 200/400/404/409/415/500 and <code>Consumes</code>. GET and POST actions are unchanged.</td></tr>
-<tr><td><code>Program.cs</code></td><td>Add <code>AddControllers(o =&gt; ...ModelBindingMessageProvider...)</code> to set the three non-echoing messages.</td></tr>
+<tr><td><code>Controllers/PersonController.cs</code></td><td>Add the <code>UpdatePerson</code> action with <code>EndpointSummary</code>/<code>EndpointDescription</code>, <code>ProducesResponseType</code> 200/400/404/409/415/500, <code>Consumes</code> and <code>[RequestSizeLimit(4096)]</code> (1b). GET and POST actions are unchanged.</td></tr>
+<tr><td><code>Program.cs</code></td><td>Add <code>AddControllers(o =&gt; ...ModelBindingMessageProvider...)</code> to set the five non-echoing messages: three property variants, plus two non-property variants (Amendment 1).</td></tr>
 <tr><td><code>Business/Queries/GetPeople.cs</code>, <code>GetPersonByName.cs</code></td><td>Normalise input with <code>InputRules.Normalize</code> (NFC plus trim) instead of <code>Trim()</code>. SQL is unchanged.</td></tr>
 <tr><td><code>README.md</code></td><td>Changelog entries (see 6). Database and Troubleshooting sections: the duplicate-name abort, how to find duplicates, and the reset for disposable dev DBs.</td></tr>
 </tbody>
@@ -186,7 +216,7 @@ public static bool IsValidName(string normalized);</code></pre>
 <thead><tr><th>File</th><th>Change</th></tr></thead>
 <tbody>
 <tr><td><code>Business/Data/Person.cs</code></td><td><code>UseCollation("NOCASE")</code> and a unique <code>HasIndex(Name)</code>.</td></tr>
-<tr><td><code>Business/Migrations/&lt;ts&gt;_AddUniquePersonNameIndex.cs</code> + <code>.Designer.cs</code> (new), <code>StargateContextModelSnapshot.cs</code> (generated)</td><td>The guard, the trim, then the generated operations. Down is generated.</td></tr>
+<tr><td><code>Business/Migrations/&lt;ts&gt;_AddUniquePersonNameIndex.cs</code> + <code>.Designer.cs</code> (new), <code>StargateContextModelSnapshot.cs</code> (generated)</td><td><code>TrimCharacterCodes</code> (1b), the guard, the trim, then the generated operations. Down is generated.</td></tr>
 </tbody>
 </table></div>
 <h3>api.Tests</h3>
@@ -214,17 +244,17 @@ public static bool IsValidName(string normalized);</code></pre>
 <div class="table-wrap"><table>
 <thead><tr><th>Item</th><th>Change</th><th>Breaking?</th></tr></thead>
 <tbody>
-<tr><td><code>PUT /Person/{personId}</code></td><td>New. 200/400/404/409/415/500, as in 4.1.</td><td><span class="tag ok">no (new)</span></td></tr>
+<tr><td><code>PUT /Person/{personId}</code></td><td>New. 200/400/404/409/413/415/500, as in 4.1.</td><td><span class="tag ok">no (new)</span></td></tr>
 <tr><td>Shared name rule (<code>GET /Person</code>, <code>GET /Person/{name}</code>)</td><td>Stricter for invisible or stray marks and invisible letters. NFD input now matches. The shown pattern string changes.</td><td><span class="tag ok">no for ASCII</span> <span class="tag warn">stricter for non-ASCII edge input</span></td></tr>
 <tr><td><code>POST /Person</code> (not edited)</td><td>The new index makes a case-variant or exact duplicate insert fail in the database. The existing controller catch turns that into <strong>500</strong> <code>{success:false, message:"An error occurred while saving the entity changes. See the inner exception for details.", responseCode:500}</code>. It used to be 200 and stored a duplicate. The message is EF's generic text, with no SQL. A whitespace-padded duplicate (<code>"Ada "</code>) still inserts, because POST does not trim.</td><td><span class="tag warn">behaviour change, accepted until 006</span></td></tr>
-<tr><td>Schema</td><td><code>Person.Name</code> is <code>TEXT COLLATE NOCASE NOT NULL</code>, with unique <code>IX_Person_Name</code>. Existing names are trimmed (spaces, tab, CR, LF).</td><td><span class="tag warn">alters existing data (trim), see Q1</span></td></tr>
+<tr><td>Schema</td><td><code>Person.Name</code> is <code>TEXT COLLATE NOCASE NOT NULL</code>, with unique <code>IX_Person_Name</code>. Existing names are trimmed of the 25 Unicode whitespace characters that <code>string.Trim()</code> removes. A name that is empty once trimmed aborts the migration (1b).</td><td><span class="tag warn">alters existing data (trim), see Q1</span></td></tr>
 <tr><td>UI client</td><td>Adds <code>updatePerson</code> and types. Nothing existing changes.</td><td><span class="tag ok">no</span></td></tr>
 </tbody>
 </table></div>
 
 <h2>7. Domain rules</h2>
 <ul>
-<li><strong>Rule 1 (Name unique)</strong> is enforced in code (normalise, then the pre-check with NOCASE) and in the database (unique index on a NOCASE column, plus the 2067 to 409 mapping). Equality is ASCII-case-insensitive after NFC and trim. Limits: non-ASCII case variants are distinct, existing non-NFC rows are not rewritten, and POST does not trim until task 006.</li>
+<li><strong>Rule 1 (Name unique)</strong> is enforced in code (normalise, then the pre-check with NOCASE) and in the database (unique index on a NOCASE column, plus the 2067 to 409 mapping). Equality is ASCII-case-insensitive after NFC and trim. The migration and the API trim the same whitespace set. Limits: non-ASCII case variants are distinct, existing non-NFC rows are not rewritten, and POST does not trim until task 006.</li>
 <li><strong>Rule 2 (no assignment means no astronaut rows)</strong>: renaming never creates or touches <code>AstronautDetail</code> or <code>AstronautDuty</code>. Tests compare dumps of both tables before and after.</li>
 <li><strong>Rules 3-7</strong>: not touched. Person-related rows keep their <code>PersonId</code>, because the rebuild keeps <code>Id</code> and the FKs reference <code>Person</code> by name.</li>
 </ul>
@@ -232,17 +262,17 @@ public static bool IsValidName(string normalized);</code></pre>
 <h2>8. Tests</h2>
 <p>The full Given/When/Then list is in <a href="../contracts/002/tests.md">tests.md</a>. Summary:</p>
 <ul>
-<li><strong>Rule unit tests</strong> (<code>InputRulesTests</code>): NFC, trim, the invisible set (each code point), leading mark, mark after digit or space, 3 vs 4 marks, Thai and Devanagari accepted, trailing <code>\n</code> rejected by raw <code>Regex.IsMatch</code>, lone surrogate does not throw, and 100 vs 101 after trim.</li>
-<li><strong>Handler tests</strong> (<code>UpdatePersonHandlerTests</code>, file DB via <code>TestDatabase</code>): success; trim and NFC stored; own name and own casing; idempotent; 404; 409 for exact, case, whitespace and NFD variants; detail and duty dumps unchanged; <strong>database-constraint path</strong>, where a <code>SaveChangesInterceptor</code> renames another row to the target name on a separate connection after the pre-check has passed, and the result must be 409 with only one row holding the name; a non-unique <code>DbUpdateException</code> is not mapped.</li>
-<li><strong>HTTP tests</strong> (<code>PersonUpdateHttpTests</code>, <code>WebApplicationFactory</code>): exact 200/404/409 bodies; 400 for empty, blank, 101 characters, disallowed, invisible, leading-mark, null, missing name, missing body, wrong JSON type, and <code>personId</code> values 0, -1, abc and 99999999999 (no echo); 415; hostile strings; <strong>concurrent</strong> parallel PUTs renaming every seeded person to case variants of one name, giving exactly one 200, the rest 409, and one row; Swagger lists the operation with 200/400/404/409. Also read-side regressions: NFD <code>GET /Person?name=</code> finds an NFC name, and an invisible character gives 400.</li>
-<li><strong>Migration tests</strong> (<code>PersonNameIndexMigrationTests</code>): fresh DB has the index and NOCASE collation; upgrade trims and keeps ids and child rows; case and whitespace duplicates abort with the message and change nothing (dump, history, schema, no temp objects); Down removes both and can be re-applied; seed data migrates from the 003 state; the existing "no pending model changes" test still passes.</li>
+<li><strong>Rule unit tests</strong> (<code>InputRulesTests</code>): NFC, trim (including Unicode whitespace), the invisible set (each code point), leading mark, mark after digit or space, 3 vs 4 marks, Thai and Devanagari accepted, supplementary-plane letters rejected, trailing <code>\n</code> rejected by raw <code>Regex.IsMatch</code>, lone surrogate does not throw, 100 vs 101 after trim, and the 800-character raw bound.</li>
+<li><strong>Handler tests</strong> (<code>UpdatePersonHandlerTests</code>, file DB via <code>TestDatabase</code>): success; trim and NFC stored; own name and own casing; idempotent; 404; 409 for exact, case, whitespace and NFD variants; detail and duty dumps unchanged; <strong>database-constraint path</strong>, where a <code>SaveChangesInterceptor</code> renames another row to the target name on a separate connection after the pre-check has passed, and the result must be 409 with only one row holding the name; a non-unique <code>DbUpdateException</code> is not mapped; a delete before the save or before the read-back gives 404; an overlong raw name is rejected.</li>
+<li><strong>HTTP tests</strong> (<code>PersonUpdateHttpTests</code>, <code>WebApplicationFactory</code>): exact 200/404/409 bodies; 400 for empty, blank, 101 characters, 3000 characters, disallowed, invisible, leading-mark, null, missing name, missing body, wrong JSON type, and <code>personId</code> values 0, -1, abc and 99999999999 (no echo); validation before lookup; 415; an over-size body is rejected; hostile strings; <strong>concurrent</strong> parallel PUTs renaming every seeded person to case variants of one name, giving exactly one 200, the rest 409, and one row; Swagger lists the operation with 200/400/404/409. Also read-side regressions: NFD <code>GET /Person?name=</code> finds an NFC name, and an invisible character gives 400.</li>
+<li><strong>Migration tests</strong> (<code>PersonNameIndexMigrationTests</code>): fresh DB has the index and NOCASE collation; upgrade trims (all 25 whitespace characters) and keeps ids and child rows; case and whitespace duplicates (including Unicode whitespace) and names that are empty once trimmed abort with the message and change nothing (dump, history, schema, no temp objects); the trim list equals the <code>string.Trim()</code> set; Down removes both and can be re-applied; seed data migrates from the 003 state; the existing "no pending model changes" test still passes.</li>
 <li><strong>UI</strong> (Vitest): request shape, 200, 404, 409, 400, 500 propagation, and a 200 with null person.</li>
 <li><strong>Mutation targets</strong> (each must fail at least one test): index removed; collation removed (case variant then succeeds); guard removed or loosened to raw NOCASE (whitespace duplicate passes the guard, then the migration fails half-way); trim removed in the handler or migration; NFC removed; one invisible code point removed from the set; the mark cap changed to <code>{0,}</code>; the 409 mapping removed (500) or widened to all <code>DbUpdateException</code> (FK test); the own-id exclusion removed (own-casing rename returns 409); idempotency (second PUT returns non-200).</li>
 </ul>
 
 <h2>9. Risks and rollout</h2>
 <ul>
-<li><strong>Data</strong>: the migration trims padded names (Q1) and otherwise changes no data. If case or whitespace duplicates exist, it aborts with nothing changed and tells the operator how to find them. Any real data needs a backup first (already in the README).</li>
+<li><strong>Data</strong>: the migration trims padded names (Q1) and otherwise changes no data. If case or whitespace duplicates exist, or a name is empty once trimmed, it aborts with nothing changed and tells the operator how to find them. Any real data needs a backup first (already in the README).</li>
 <li><strong>Residual rule-1 gaps</strong>, documented:
   <ul>
     <li>Non-ASCII case variants are distinct names.</li>
@@ -255,11 +285,12 @@ public static bool IsValidName(string normalized);</code></pre>
 <li><strong>Unverified</strong> (each has a cheap check; the lead must confirm before merge):
   <ol>
     <li>The ModelState key for an invalid body name is <code>Name</code>. Check: the first HTTP 400 test. Tests compare the key case-insensitively.</li>
-    <li>A wrong <code>Content-Type</code> gives 415 with a <code>ProblemDetails</code> body (via <code>[ApiController]</code> client-error mapping). Check: an HTTP test.</li>
+    <li><strong>Resolved by Amendment 1:</strong> the prediction that a wrong <code>Content-Type</code> gives 415 with a <code>ProblemDetails</code> body was wrong. A non-JSON Content-Type is rejected by endpoint routing with an empty body. Only a missing Content-Type gets <code>ProblemDetails</code>. The contract now guarantees the status only.</li>
     <li>Through EF, the <code>DbUpdateException.InnerException</code> is the <code>SqliteException</code> with code 2067. Probe 3 verified this on raw ADO only. Check: the interceptor handler test.</li>
     <li>Parallel PUTs on one SQLite file do not surface <code>SQLITE_BUSY</code> (default 30 s busy timeout). Check: the concurrent HTTP test, run 20 times locally.</li>
     <li>The binding-message override does not change any existing response. Check: the full existing test suite stays green.</li>
-    <li><code>trim(x, char(32,9,10,13))</code> behaves as expected. Probe 2 used plain <code>trim()</code>. Check: a migration test with a tab-padded name.</li>
+    <li><strong>Resolved by Amendment 1b:</strong> SQLite <code>trim(x, char(...))</code> with the 25-code-point list trims every whitespace character at both ends. M10 covers this.</li>
+    <li>(1b) A body over 4096 bytes gets 413 on real Kestrel. TestServer does not enforce <code>[RequestSizeLimit]</code>. Check: QA step 10.</li>
   </ol></li>
 </ul>
 <h3>QA on the real API (Development, seeded DB from task 004)</h3>
@@ -273,6 +304,7 @@ public static bool IsValidName(string normalized);</code></pre>
 <li>Repeating the same PUT gives the same 200 body.</li>
 <li>On a copy of a DB at the 003 state, add <code>Ada</code> and <code>" ada"</code> and run <code>dotnet ef database update</code>. It fails with the AddUniquePersonNameIndex message, and a sqlite3 dump is identical before and after. Starting the app in Development on that DB fails loudly (initializer Critical log), and no seed is written.</li>
 <li>A <code>POST /Person</code> duplicate in a different case now gives the generic 500 described in 6 (the documented interim behaviour).</li>
+<li>(1b) Against the real Kestrel host, a PUT whose body is over 4096 bytes gets 413 and changes nothing.</li>
 </ol>
 
 <h2>10. Interplay with other tasks</h2>
@@ -304,7 +336,7 @@ public static bool IsValidName(string normalized);</code></pre>
 
 <h2>13. Questions for the user</h2>
 <ol>
-<li><strong>Q1: Trim existing names in the migration?</strong> This alters data in rows with padded names. CLAUDE.md asks for approval before doing that. <em>Recommendation: yes.</em> It matches the "names are trimmed before stored" decision. It only runs after the guard proves no collision. The alternative is for the guard to also abort on any padded name, which forces manual cleanup.</li>
+<li><strong>Q1: Trim existing names in the migration?</strong> This alters data in rows with padded names. CLAUDE.md asks for approval before doing that. <em>Recommendation: yes.</em> It matches the "names are trimmed before stored" decision. It only runs after the guard proves no collision and no name that is empty once trimmed. The trim set is the 25 Unicode whitespace characters the API trims (Amendment 1b). The alternative is for the guard to also abort on any padded name, which forces manual cleanup.</li>
 <li><strong>Q2: Accept the interim <code>POST /Person</code> behaviour until 006?</strong> Case or exact duplicates give a generic 500, and padded names still insert. <em>Recommendation: accept.</em> 006 owns POST and depends on this task.</li>
 <li><strong>Q3: Combining-mark limits.</strong> A mark must follow a letter, with at most 3 in a row after NFC. <em>Recommendation: accept.</em> This covers real names in Latin, Thai, Indic and pointed Hebrew scripts.</li>
 </ol>
